@@ -28,12 +28,21 @@ GitHub 저장소를 Vercel에 연결하면 push마다 자동 배포됩니다.
    - **Framework Preset**: Next.js (자동 감지)
 3. **Deploy** 클릭 → `https://<프로젝트>.vercel.app` 발급
 
-### ⚠️ 커뮤니티 영속성 (중요)
-Vercel은 서버리스라 파일시스템이 **휘발성**입니다. 현재 커뮤니티는 JSON 파일 스토어를
-쓰는데, 코드가 자동으로 `/tmp`로 폴백하므로 **배포는 깨지지 않지만**, 글이 인스턴스
-재활용 시 사라집니다(데모용으로는 충분). 글을 영구 보존하려면:
-- **Vercel Postgres / KV** 또는 **Supabase**(무료 티어)로 `apps/web/src/lib/store.ts`를
-  교체하면 됩니다. (현재 store는 같은 함수 시그니처라 교체가 drop-in)
+### 커뮤니티 영구 저장 — Vercel Postgres 연결 (권장)
+스토어는 **플러그형**입니다: 환경변수 `POSTGRES_URL`이 있으면 자동으로 Postgres에
+저장하고, 없으면 파일/메모리(휘발성)로 동작합니다. 코드 수정 없이 DB만 붙이면 됩니다.
+
+1. Vercel 프로젝트 → **Storage** 탭 → **Create Database** → **Postgres** 생성
+2. 그 DB를 이 프로젝트에 **Connect** → Vercel이 `POSTGRES_URL` 등 환경변수를 자동 주입
+3. **Redeploy** (Deployments → 최신 → Redeploy)
+4. 끝! 첫 요청 때 테이블이 자동 생성·시드됩니다.
+
+확인: 배포 주소에서 **`/api/health`** 를 열어보세요.
+- `{"backend":"postgres", ...}` → 영구 저장 활성 ✅
+- `{"backend":"file", ...}` → 아직 파일/메모리(휘발성) 상태
+
+> Supabase 등 다른 Postgres를 써도 됩니다 — 환경변수 이름만 `POSTGRES_URL`로 맞추면 됩니다.
+> (`@vercel/postgres`는 풀링된 Neon/Vercel Postgres 연결 문자열을 기대합니다.)
 
 ---
 
