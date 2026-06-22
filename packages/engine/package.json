@@ -1,0 +1,31 @@
+{
+  "name": "@gto/engine",
+  "version": "0.1.0",
+  "description": "Pure TypeScript poker engine: hand evaluation, equity (Monte Carlo), ranges, ICM, preflop GTO approximation. Shared by web and mobile.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "react-native": "./dist/index.js",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsc -p tsconfig.test.json && node --test \"dist-test/**/*.test.js\"",
+    "clean": "rm -rf dist dist-test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "typescript": "^5.5.4"
+  }
+}
