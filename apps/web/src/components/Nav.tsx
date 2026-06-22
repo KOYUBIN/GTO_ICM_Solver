@@ -7,7 +7,10 @@ const LINKS = [
   { href: '/', label: '대시보드' },
   { href: '/equity', label: '에쿼티' },
   { href: '/ranges', label: '레인지' },
+  { href: '/charts', label: '차트' },
   { href: '/pushfold', label: '푸시/폴드' },
+  { href: '/solver', label: '솔버' },
+  { href: '/analyze', label: '핸드분석' },
   { href: '/icm', label: 'ICM' },
   { href: '/community', label: '커뮤니티' },
 ];

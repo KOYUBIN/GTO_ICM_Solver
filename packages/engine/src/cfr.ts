@@ -157,8 +157,11 @@ export function solveRiver(config: RiverSolveConfig): RiverSolveResult {
     return d;
   };
 
-  // External-sampling MCCFR walk for traverser `tr`.
-  function walk(node: Node, tr: Player, h0: number, h1: number): number {
+  // External-sampling MCCFR walk for traverser `tr`, at iteration `t`.
+  // Uses two CFR+ refinements: regret-matching+ (regrets floored at 0) and
+  // linear averaging (strategy contributions weighted by iteration), which
+  // speed up convergence over vanilla CFR.
+  function walk(node: Node, tr: Player, h0: number, h1: number, t: number): number {
     if (node.kind === 'term') {
       const [p0, p1] = node.payoff(oopScore[h0], ipScore[h1]);
       return tr === 0 ? p0 : p1;
@@ -171,23 +174,25 @@ export function solveRiver(config: RiverSolveConfig): RiverSolveResult {
       const util = new Array(node.actions.length);
       let nodeUtil = 0;
       for (let a = 0; a < node.actions.length; a++) {
-        util[a] = walk(node.children[a], tr, h0, h1);
+        util[a] = walk(node.children[a], tr, h0, h1, t);
         nodeUtil += strat[a] * util[a];
       }
       for (let a = 0; a < node.actions.length; a++) {
-        data.regret[a] += util[a] - nodeUtil;
+        // Regret-matching+: keep cumulative regret non-negative.
+        data.regret[a] = Math.max(0, data.regret[a] + (util[a] - nodeUtil));
       }
       return nodeUtil;
     } else {
-      // Opponent node: accumulate average strategy, sample one action.
-      for (let a = 0; a < node.actions.length; a++) data.stratSum[a] += strat[a];
+      // Opponent node: accumulate (linearly weighted) average strategy and
+      // sample one action.
+      for (let a = 0; a < node.actions.length; a++) data.stratSum[a] += t * strat[a];
       let r = rnd();
       let a = 0;
       for (; a < node.actions.length - 1; a++) {
         if (r < strat[a]) break;
         r -= strat[a];
       }
-      return walk(node.children[a], tr, h0, h1);
+      return walk(node.children[a], tr, h0, h1, t);
     }
   }
 
@@ -204,8 +209,8 @@ export function solveRiver(config: RiverSolveConfig): RiverSolveResult {
 
   for (let it = 0; it < iterations; it++) {
     const [h0, h1] = sampleHands();
-    walk(tree, 0, h0, h1);
-    walk(tree, 1, h0, h1);
+    walk(tree, 0, h0, h1, it + 1);
+    walk(tree, 1, h0, h1, it + 1);
   }
 
   // --- Reporting: read average strategies and compute exact EV/frequencies. ---
