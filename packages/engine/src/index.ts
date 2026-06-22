@@ -11,3 +11,6 @@ export * from './range.js';
 export * from './equity.js';
 export * from './icm.js';
 export * from './preflop.js';
+export * from './charts.js';
+export * from './cfr.js';
+export * from './enumerate.js';
