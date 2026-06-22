@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "GTO/ICM Solver",
+    "slug": "gto-icm-solver",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "gtosolver",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "ios": { "supportsTablet": true },
+    "android": {
+      "adaptiveIcon": { "backgroundColor": "#0e1116" }
+    },
+    "web": { "bundler": "metro", "output": "static" },
+    "plugins": ["expo-router"]
+  }
+}
