@@ -7,21 +7,39 @@ export interface ActionGridProps {
   data: Map<string, Record<string, number>>;
   /** action -> color, in stacking order (first = bottom of the cell). */
   colors: { action: string; color: string; label: string }[];
+  /** Currently selected hand label (highlighted). */
+  selected?: string | null;
+  /** Click handler — enables hand selection. */
+  onSelect?: (label: string) => void;
 }
 
 /**
  * 13x13 grid where each cell is split vertically into colored bands sized by
- * each action's frequency — the GTO-Wizard style strategy view.
+ * each action's frequency — the GTO-Wizard style strategy view. Optionally
+ * clickable to select a hand.
  */
-export function ActionGrid({ data, colors }: ActionGridProps) {
+export function ActionGrid({ data, colors, selected, onSelect }: ActionGridProps) {
   const labels = allGridLabels();
   return (
     <div>
       <div className="range-grid">
         {labels.map((label) => {
           const freqs = data.get(label);
+          const isSel = selected === label;
           return (
-            <div key={label} className="range-cell" style={{ position: 'relative', padding: 0 }}>
+            <div
+              key={label}
+              className="range-cell"
+              onClick={onSelect ? () => onSelect(label) : undefined}
+              style={{
+                position: 'relative',
+                padding: 0,
+                cursor: onSelect ? 'pointer' : 'default',
+                outline: isSel ? '2px solid #fff' : undefined,
+                outlineOffset: isSel ? '-2px' : undefined,
+                zIndex: isSel ? 2 : undefined,
+              }}
+            >
               {freqs && (
                 <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column' }}>
                   {colors.map(({ action, color }) => {
@@ -31,7 +49,14 @@ export function ActionGrid({ data, colors }: ActionGridProps) {
                   })}
                 </div>
               )}
-              <span style={{ position: 'relative', zIndex: 1, color: freqs ? '#0a0e13' : 'var(--text-dim)', fontWeight: 700 }}>
+              <span
+                style={{
+                  position: 'relative',
+                  zIndex: 1,
+                  color: freqs ? '#0a0e13' : 'var(--text-dim)',
+                  fontWeight: 700,
+                }}
+              >
                 {label}
               </span>
             </div>
