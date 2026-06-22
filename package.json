@@ -1,0 +1,21 @@
+{
+  "name": "gto-icm-solver",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GTO/ICM No-Limit Texas Hold'em solver with community features (web + mobile). Reference: GTO Wizard.",
+  "workspaces": [
+    "packages/*",
+    "apps/web"
+  ],
+  "scripts": {
+    "build:engine": "npm run build -w @gto/engine",
+    "test:engine": "npm run test -w @gto/engine",
+    "build:web": "npm run build -w web",
+    "dev:web": "npm run dev -w web",
+    "build": "npm run build:engine && npm run build:web"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}
