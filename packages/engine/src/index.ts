@@ -13,5 +13,6 @@ export * from './icm.js';
 export * from './preflop.js';
 export * from './charts.js';
 export * from './cfr.js';
+export * from './spotev.js';
 export * from './enumerate.js';
 export * from './history.js';
