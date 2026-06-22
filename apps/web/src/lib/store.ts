@@ -1,16 +1,29 @@
 /**
  * Server-only JSON-file store for the community backend.
  *
- * Hand-rolled persistence via node `fs` (no native deps). Data lives at
- * apps/web/.data/community.json, seeded on first access. Writes are serialized
- * through a tiny promise chain so concurrent route handlers don't clobber.
+ * Hand-rolled persistence via node `fs` (no native deps). Reads are served from
+ * an in-memory cache so the API never fails even when the filesystem is
+ * read-only (e.g. serverless), and writes are best-effort persisted to disk so
+ * a single long-lived server (Render/Railway, local dev) keeps data.
+ *
+ * Storage location (first match wins):
+ *   1. COMMUNITY_DATA_DIR env var
+ *   2. os.tmpdir()/gto-community  on serverless (Vercel) — writable but ephemeral
+ *   3. <cwd>/.data                locally — persistent
  */
 
 import { promises as fs } from 'fs';
+import os from 'os';
 import path from 'path';
 import type { Comment, NewPost, Post, PostType, ArticleCategory } from './community';
 
-const DATA_DIR = path.join(process.cwd(), '.data');
+function resolveDataDir(): string {
+  if (process.env.COMMUNITY_DATA_DIR) return process.env.COMMUNITY_DATA_DIR;
+  if (process.env.VERCEL) return path.join(os.tmpdir(), 'gto-community');
+  return path.join(process.cwd(), '.data');
+}
+
+const DATA_DIR = resolveDataDir();
 const DATA_FILE = path.join(DATA_DIR, 'community.json');
 
 interface DB {
@@ -97,26 +110,37 @@ const SEED: Post[] = [
 ];
 
 let writeChain: Promise<void> = Promise.resolve();
+// In-memory source of truth for the lifetime of the process; survives a
+// read-only filesystem so the API keeps working even when persistence fails.
+let cache: DB | null = null;
 
 async function read(): Promise<DB> {
+  if (cache) return cache;
   try {
     const raw = await fs.readFile(DATA_FILE, 'utf8');
-    return JSON.parse(raw) as DB;
+    cache = JSON.parse(raw) as DB;
   } catch {
-    // First access (or corrupt): seed and persist.
-    const db: DB = { posts: SEED };
-    await write(db);
-    return db;
+    // First access (or corrupt/read-only): seed and best-effort persist.
+    cache = { posts: structuredClone(SEED) };
+    await write(cache);
   }
+  return cache;
 }
 
-// Serialized atomic-ish write (write tmp, rename).
+// Update the cache, then best-effort persist (serialized, atomic-ish). A
+// failed disk write (e.g. serverless read-only FS) is non-fatal: the cache
+// still serves reads for this instance's lifetime.
 function write(db: DB): Promise<void> {
+  cache = db;
   writeChain = writeChain.then(async () => {
-    await fs.mkdir(DATA_DIR, { recursive: true });
-    const tmp = `${DATA_FILE}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(db, null, 2), 'utf8');
-    await fs.rename(tmp, DATA_FILE);
+    try {
+      await fs.mkdir(DATA_DIR, { recursive: true });
+      const tmp = `${DATA_FILE}.tmp`;
+      await fs.writeFile(tmp, JSON.stringify(db, null, 2), 'utf8');
+      await fs.rename(tmp, DATA_FILE);
+    } catch {
+      // ignore — persistence is optional; cache remains authoritative.
+    }
   });
   return writeChain;
 }

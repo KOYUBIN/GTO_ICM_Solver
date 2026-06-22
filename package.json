@@ -13,7 +13,9 @@
     "build:web": "npm run build -w web",
     "dev:web": "npm run dev -w web",
     "build": "npm run build:engine && npm run build:web",
-    "lab": "npm run build:engine && node tools/mc-lab.mjs"
+    "lab": "npm run build:engine && node tools/mc-lab.mjs",
+    "vercel-build": "npm run build:engine && npm run build:web",
+    "postinstall": "npm run build:engine"
   },
   "engines": {
     "node": ">=20"
