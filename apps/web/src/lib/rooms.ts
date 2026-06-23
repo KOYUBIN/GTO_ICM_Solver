@@ -6,7 +6,7 @@
  * client imports (roomStore is server-only). Mirrors lib/community.ts.
  */
 
-import type { TableState, LegalActions, Action } from '@gto/engine';
+import type { TableState, LegalActions, Action, BlindLevel } from '@gto/engine';
 
 export interface RoomPlayer {
   id: string;
@@ -24,6 +24,8 @@ export interface RoomConfig {
   bigBlind: number;
   ante: number;
   levelMinutes: number;
+  /** Blind-level ladder (tournament); a single level means fixed blinds. */
+  levels?: BlindLevel[];
 }
 
 export interface Room {
@@ -34,8 +36,24 @@ export interface Room {
   config: RoomConfig;
   /** The holdem table state JSON (null until the first hand is dealt). */
   gameState: TableState | null;
+  /** ISO time the first hand was dealt — drives the blind clock. */
+  startedAt?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Live tournament-clock info computed server-side for the UI. */
+export interface TournamentClock {
+  level: number; // 1-based
+  smallBlind: number;
+  bigBlind: number;
+  ante: number;
+  levelMinutes: number;
+  /** Seconds left in the current level (0 when no clock / cash). */
+  secondsLeft: number;
+  /** The next level's blinds, if any. */
+  next?: { smallBlind: number; bigBlind: number; ante: number };
+  isLastLevel: boolean;
 }
 
 /** What the GET endpoint returns: a room with hole cards redacted per-viewer. */
@@ -43,6 +61,8 @@ export interface RoomView extends Room {
   /** The viewer's own seat id (so the UI can highlight it), if known. */
   you?: string;
   legal?: LegalActions | null;
+  /** Live blind-level clock (tournaments only). */
+  clock?: TournamentClock | null;
 }
 
 // ----- client fetch helpers -----
