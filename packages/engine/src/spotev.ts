@@ -73,3 +73,50 @@ export function shoveEv(label: string, p: ShoveEvParams): ShoveEvResult {
     best: evShove > 0 ? 'shove' : 'fold',
   };
 }
+
+export interface RaiseEvParams {
+  /** Raise size in bb (e.g. 2.5). */
+  raiseTo: number;
+  /** Dead money already in the middle (blinds + antes), in bb. Default 1.5. */
+  potBB?: number;
+  /** Players behind continue (call/3bet) with the top this-% of hands. */
+  continuePercent: number;
+  /** Number of players left to act. */
+  playersBehind: number;
+  /**
+   * Equity-realization factor when called (postflop): how much of raw equity
+   * the hero actually realizes. ~0.85 in position, less out of position.
+   */
+  realization?: number;
+  iterations?: number;
+  seed?: number;
+}
+
+/**
+ * Approximate chip-EV of opening (small raise). Folds behind win the dead pot;
+ * when called, the hero realizes a fraction of equity on the inflated pot.
+ * This is a coarse single-caller model — directionally useful, not exact.
+ *
+ *   EV = fe * pot + (1 - fe) * ( realization * eq * potIfCalled - raiseTo )
+ */
+export function openRaiseEv(label: string, p: RaiseEvParams): number {
+  const potBB = p.potBB ?? 1.5;
+  const realization = p.realization ?? 0.85;
+  const continueRange = topPercentRange(p.continuePercent);
+  const combos = labelToCombos(label);
+  const hero = cardsToString(combos[0]);
+
+  const eq = equityVsRanges(hero, [continueRange], {
+    iterations: p.iterations ?? 4000,
+    seed: p.seed ?? 777,
+  });
+  const equityVsContinue = eq.equities[0];
+
+  const contFrac = Math.max(0, Math.min(1, p.continuePercent / 100));
+  const fe = Math.pow(1 - contFrac, Math.max(1, p.playersBehind));
+
+  const potIfCalled = potBB + 2 * p.raiseTo; // hero + one caller
+  const evCalled = realization * equityVsContinue * potIfCalled - p.raiseTo;
+
+  return fe * potBB + (1 - fe) * evCalled;
+}
