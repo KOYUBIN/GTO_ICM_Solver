@@ -12,6 +12,7 @@ const LINKS = [
   { href: '/solver', label: '솔버' },
   { href: '/analyze', label: '핸드분석' },
   { href: '/icm', label: 'ICM' },
+  { href: '/play', label: '홀덤' },
   { href: '/community', label: '커뮤니티' },
 ];
 

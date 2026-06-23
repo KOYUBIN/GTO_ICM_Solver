@@ -10,7 +10,7 @@
  */
 
 import { topPercentRange } from './preflop.js';
-import { labelToCombos } from './range.js';
+import { labelToCombos, rangePercent } from './range.js';
 import { cardsToString } from './cards.js';
 import { equityVsRanges } from './equity.js';
 
@@ -81,11 +81,19 @@ export interface RaiseEvParams {
   potBB?: number;
   /** Players behind continue (call/3bet) with the top this-% of hands. */
   continuePercent: number;
+  /**
+   * An explicit per-defender continue range (e.g. a real position-specific
+   * defend range from the charts). When given it overrides continuePercent for
+   * both the fold-equity term and the equity-when-called term — a meaningfully
+   * more accurate model than a flat top-X%.
+   */
+  continueRange?: Map<string, number>;
   /** Number of players left to act. */
   playersBehind: number;
   /**
    * Equity-realization factor when called (postflop): how much of raw equity
-   * the hero actually realizes. ~0.85 in position, less out of position.
+   * the hero actually realizes. Position-dependent — pass ~0.9 in position
+   * (BTN/CO), ~0.75 in early position, ~0.65 from the blinds (out of position).
    */
   realization?: number;
   iterations?: number;
@@ -95,14 +103,16 @@ export interface RaiseEvParams {
 /**
  * Approximate chip-EV of opening (small raise). Folds behind win the dead pot;
  * when called, the hero realizes a fraction of equity on the inflated pot.
- * This is a coarse single-caller model — directionally useful, not exact.
+ * This is a coarse single-caller model — directionally useful, not exact —
+ * but it is position-aware: pass a real `continueRange` and a position-based
+ * `realization` for the most accurate estimate.
  *
  *   EV = fe * pot + (1 - fe) * ( realization * eq * potIfCalled - raiseTo )
  */
 export function openRaiseEv(label: string, p: RaiseEvParams): number {
   const potBB = p.potBB ?? 1.5;
   const realization = p.realization ?? 0.85;
-  const continueRange = topPercentRange(p.continuePercent);
+  const continueRange = p.continueRange ?? topPercentRange(p.continuePercent);
   const combos = labelToCombos(label);
   const hero = cardsToString(combos[0]);
 
@@ -112,11 +122,22 @@ export function openRaiseEv(label: string, p: RaiseEvParams): number {
   });
   const equityVsContinue = eq.equities[0];
 
-  const contFrac = Math.max(0, Math.min(1, p.continuePercent / 100));
+  // Per-defender continue fraction from the actual range when supplied.
+  const contFrac = Math.max(
+    0,
+    Math.min(1, p.continueRange ? rangePercent(p.continueRange) / 100 : p.continuePercent / 100),
+  );
   const fe = Math.pow(1 - contFrac, Math.max(1, p.playersBehind));
 
   const potIfCalled = potBB + 2 * p.raiseTo; // hero + one caller
   const evCalled = realization * equityVsContinue * potIfCalled - p.raiseTo;
 
   return fe * potBB + (1 - fe) * evCalled;
+}
+
+/** Position-based equity-realization factor (out-of-position realizes less). */
+export function realizationFor(positionsBehind: number): number {
+  // More players behind ≈ earlier position ≈ worse realization.
+  // 0 behind (BTN) -> 0.92, scaling down toward ~0.68 in early position.
+  return Math.max(0.62, 0.92 - positionsBehind * 0.05);
 }

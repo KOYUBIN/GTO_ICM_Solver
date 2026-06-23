@@ -1,0 +1,288 @@
+/**
+ * Room store (server-only).
+ *
+ * Holds multiplayer Hold'em tables. Like the community store it is pluggable:
+ * Postgres when POSTGRES_URL is set (cross-instance, the only thing that works
+ * reliably on Vercel serverless), otherwise an in-memory/file fallback that is
+ * fine for a single long-lived server or local dev.
+ *
+ * All game mutations (start a hand, apply an action) run through the @gto/engine
+ * holdem state machine here, so the server is authoritative — clients only poll
+ * and render. The engine state is stored as JSON (JSONB in Postgres).
+ *
+ * SERVERLESS CAVEAT: the file/memory backend is per-instance and ephemeral.
+ * With multiple Vercel lambdas, two players can land on different instances and
+ * see divergent state. For real multiplayer set POSTGRES_URL so all instances
+ * share one row per room.
+ */
+
+import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
+import { sql } from '@vercel/postgres';
+import {
+  createGame,
+  startHand,
+  applyAction,
+  redactFor,
+  legalActions,
+  type TableState,
+  type Action,
+} from '@gto/engine';
+import type { Room, RoomConfig, RoomView } from './rooms';
+
+const usePg = !!process.env.POSTGRES_URL;
+export const ROOM_STORE_BACKEND = usePg ? 'postgres' : 'file';
+
+// ---------- shared logic over a raw Room ----------
+
+function genCode(): string {
+  // 4-char A-Z/2-9 code (no 0/1/O/I to avoid confusion).
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let s = '';
+  for (let i = 0; i < 4; i++) s += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return s;
+}
+
+function genId(prefix: string): string {
+  return `${prefix}${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
+}
+
+function newRoom(name: string, hostName: string, config: RoomConfig): { room: Room; playerId: string } {
+  const hostId = genId('u');
+  const now = new Date().toISOString();
+  const room: Room = {
+    id: genCode(),
+    name: name || '홀덤 테이블',
+    hostId,
+    players: [{ id: hostId, name: hostName || '호스트', seat: 0 }],
+    config,
+    gameState: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  return { room, playerId: hostId };
+}
+
+/** Add a player to a room (mutates and returns the new player's id), or null. */
+function addPlayer(room: Room, name: string): string | null {
+  if (room.players.length >= 9) return null;
+  // Block joins mid-hand to keep seating stable; they can join next hand.
+  const id = genId('u');
+  room.players.push({ id, name: name || `P${room.players.length}`, seat: room.players.length });
+  room.updatedAt = new Date().toISOString();
+  return id;
+}
+
+/** Build (or rebuild) the engine table from the room's players + config. */
+function freshGame(room: Room): TableState {
+  return createGame({
+    players: room.players.map((p) => ({ id: p.id, name: p.name, stack: room.config.startingStack })),
+    smallBlind: room.config.smallBlind,
+    bigBlind: room.config.bigBlind,
+    ante: room.config.ante,
+    seed: Math.floor(Math.random() * 1e9),
+  });
+}
+
+/** Host starts/deals the next hand. Carries stacks over between hands. */
+function dealNext(room: Room): TableState {
+  let state = room.gameState;
+  if (!state) {
+    state = freshGame(room);
+  } else {
+    // Sync any players who joined since the table was created (seat them with a
+    // starting stack), then deal the next hand keeping existing stacks.
+    state = syncSeats(state, room);
+  }
+  const next = startHand(state);
+  room.gameState = next;
+  room.updatedAt = new Date().toISOString();
+  return next;
+}
+
+/** Merge newly-joined room players into an existing engine state. */
+function syncSeats(state: TableState, room: Room): TableState {
+  const known = new Set(state.seats.map((s) => s.id));
+  const additions = room.players.filter((p) => !known.has(p.id));
+  if (!additions.length) return state;
+  const seats = [
+    ...state.seats,
+    ...additions.map((p) => ({
+      id: p.id,
+      name: p.name,
+      stack: room.config.startingStack,
+      status: 'active' as const,
+      holeCards: [] as number[],
+      committedThisStreet: 0,
+      committedTotal: 0,
+      hasActed: false,
+    })),
+  ];
+  return { ...state, seats };
+}
+
+/** Apply a player's action through the engine. */
+function applyRoomAction(room: Room, playerId: string, action: Action): TableState {
+  if (!room.gameState) throw new Error('아직 핸드가 시작되지 않았습니다.');
+  const next = applyAction(room.gameState, playerId, action);
+  room.gameState = next;
+  room.updatedAt = new Date().toISOString();
+  return next;
+}
+
+/** Public per-viewer view: redact opponents' cards + attach legal actions. */
+export function toView(room: Room, viewerId?: string): RoomView {
+  const view: RoomView = { ...room, you: viewerId };
+  if (room.gameState) {
+    view.gameState = redactFor(room.gameState, viewerId);
+    // Only expose legal actions to the player whose turn it is.
+    const toAct = room.gameState.seats[room.gameState.toAct];
+    view.legal = toAct && viewerId && toAct.id === viewerId ? legalActions(room.gameState) : null;
+  }
+  return view;
+}
+
+// ---------- backend: file / memory ----------
+
+function resolveDataDir(): string {
+  if (process.env.ROOM_DATA_DIR) return process.env.ROOM_DATA_DIR;
+  if (process.env.VERCEL) return path.join(os.tmpdir(), 'gto-rooms');
+  return path.join(process.cwd(), '.data');
+}
+const DATA_DIR = resolveDataDir();
+const DATA_FILE = path.join(DATA_DIR, 'rooms.json');
+
+let cache: Record<string, Room> | null = null;
+let writeChain: Promise<void> = Promise.resolve();
+
+async function fileRead(): Promise<Record<string, Room>> {
+  if (cache) return cache;
+  try {
+    cache = JSON.parse(await fs.readFile(DATA_FILE, 'utf8'));
+  } catch {
+    cache = {};
+  }
+  return cache!;
+}
+
+function fileWrite(db: Record<string, Room>): Promise<void> {
+  cache = db;
+  writeChain = writeChain.then(async () => {
+    try {
+      await fs.mkdir(DATA_DIR, { recursive: true });
+      const tmp = `${DATA_FILE}.tmp`;
+      await fs.writeFile(tmp, JSON.stringify(db), 'utf8');
+      await fs.rename(tmp, DATA_FILE);
+    } catch {
+      // persistence is best-effort; cache stays authoritative.
+    }
+  });
+  return writeChain;
+}
+
+// ---------- backend: postgres ----------
+
+let pgReady: Promise<void> | null = null;
+function pgEnsure(): Promise<void> {
+  if (!pgReady) {
+    pgReady = sql`CREATE TABLE IF NOT EXISTS rooms (
+      id text PRIMARY KEY,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      data jsonb NOT NULL
+    )`.then(() => undefined);
+  }
+  return pgReady;
+}
+
+async function pgGet(id: string): Promise<Room | undefined> {
+  await pgEnsure();
+  const { rows } = await sql`SELECT data FROM rooms WHERE id = ${id}`;
+  return rows[0]?.data as Room | undefined;
+}
+
+async function pgPut(room: Room): Promise<void> {
+  await pgEnsure();
+  await sql`INSERT INTO rooms (id, created_at, updated_at, data)
+    VALUES (${room.id}, ${room.createdAt}, ${room.updatedAt}, ${JSON.stringify(room)}::jsonb)
+    ON CONFLICT (id) DO UPDATE SET updated_at = ${room.updatedAt}, data = ${JSON.stringify(room)}::jsonb`;
+}
+
+// ---------- public API (backend-agnostic) ----------
+
+export async function getRoom(id: string): Promise<Room | undefined> {
+  const code = id.toUpperCase();
+  if (usePg) return pgGet(code);
+  const db = await fileRead();
+  return db[code];
+}
+
+export async function listRooms(): Promise<Room[]> {
+  if (usePg) {
+    await pgEnsure();
+    const { rows } = await sql`SELECT data FROM rooms ORDER BY updated_at DESC LIMIT 100`;
+    return rows.map((r) => r.data as Room);
+  }
+  const db = await fileRead();
+  return Object.values(db).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+export async function createRoom(
+  name: string,
+  hostName: string,
+  config: RoomConfig,
+): Promise<{ room: Room; playerId: string }> {
+  const { room, playerId } = newRoom(name, hostName, config);
+  if (usePg) {
+    await pgPut(room);
+  } else {
+    const db = await fileRead();
+    db[room.id] = room;
+    await fileWrite(db);
+  }
+  return { room, playerId };
+}
+
+export async function joinRoom(
+  id: string,
+  name: string,
+): Promise<{ room: Room; playerId: string } | null> {
+  const code = id.toUpperCase();
+  const room = await getRoom(code);
+  if (!room) return null;
+  const playerId = addPlayer(room, name);
+  if (!playerId) return null;
+  await persist(room);
+  return { room, playerId };
+}
+
+export async function startNextHand(id: string, playerId: string): Promise<Room> {
+  const code = id.toUpperCase();
+  const room = await getRoom(code);
+  if (!room) throw new Error('방을 찾을 수 없습니다.');
+  if (room.hostId !== playerId) throw new Error('호스트만 딜할 수 있습니다.');
+  if (room.players.length < 2) throw new Error('플레이어가 2명 이상이어야 합니다.');
+  dealNext(room);
+  await persist(room);
+  return room;
+}
+
+export async function doAction(id: string, playerId: string, action: Action): Promise<Room> {
+  const code = id.toUpperCase();
+  const room = await getRoom(code);
+  if (!room) throw new Error('방을 찾을 수 없습니다.');
+  applyRoomAction(room, playerId, action);
+  await persist(room);
+  return room;
+}
+
+async function persist(room: Room): Promise<void> {
+  if (usePg) {
+    await pgPut(room);
+  } else {
+    const db = await fileRead();
+    db[room.id] = room;
+    await fileWrite(db);
+  }
+}

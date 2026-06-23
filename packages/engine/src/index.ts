@@ -16,3 +16,5 @@ export * from './cfr.js';
 export * from './spotev.js';
 export * from './enumerate.js';
 export * from './history.js';
+export * from './holdem.js';
+export * from './blinds.js';
