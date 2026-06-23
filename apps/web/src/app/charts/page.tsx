@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import {
   getChart,
   shoveEv,
+  openRaiseEv,
   labelToCombos,
   cardsToString,
   POSITIONS_6MAX,
@@ -18,7 +19,7 @@ import { PlayingCards } from '@/components/Cards';
 const ACTION_COLORS = [
   { action: 'raise', color: '#f85149', label: '레이즈/3벳' },
   { action: 'call', color: '#3fb950', label: '콜' },
-  { action: 'fold', color: '#2a323d', label: '폴드' },
+  { action: 'fold', color: '#3b6fb0', label: '폴드' },
 ];
 
 const LINES: { value: ActionLine; label: string }[] = [
@@ -31,6 +32,7 @@ export default function ChartsPage() {
   const [heroPos, setHeroPos] = useState<Position>('BTN');
   const [villainPos, setVillainPos] = useState<Position>('CO');
   const [stackBB, setStackBB] = useState(100);
+  const [raiseTo, setRaiseTo] = useState(2.5);
   const [callPercent, setCallPercent] = useState(18);
   const [selected, setSelected] = useState<string | null>('AA');
 
@@ -59,26 +61,53 @@ export default function ChartsPage() {
     return Math.max(1, POSITIONS_6MAX.length - 1 - idx);
   }, [heroPos]);
 
-  // Approximate shove EV for the selected hand.
-  const ev = useMemo(() => {
+  // Per-action approximate EVs for the selected hand (combos are ~symmetric
+  // preflop, so the whole class shares these numbers — as in GTO Wizard).
+  const actionEvs = useMemo(() => {
     if (!selected) return null;
-    return shoveEv(selected, { stackBB, callPercent, playersBehind, iterations: 4000 });
-  }, [selected, stackBB, callPercent, playersBehind]);
+    const allin = shoveEv(selected, { stackBB, callPercent, playersBehind, iterations: 4000 }).evShove;
+    const raise = openRaiseEv(selected, {
+      raiseTo,
+      continuePercent: callPercent,
+      playersBehind,
+      iterations: 4000,
+    });
+    const rows = [
+      { key: 'raise', label: `레이즈 ${raiseTo}`, ev: raise, color: '#f85149' },
+      { key: 'allin', label: `올인 ${stackBB}`, ev: allin, color: '#f0883e' },
+      { key: 'fold', label: '폴드', ev: 0, color: '#3b6fb0' },
+    ];
+    const best = rows.reduce((m, r) => (r.ev > m.ev ? r : m), rows[0]).key;
+    return { rows, best };
+  }, [selected, stackBB, callPercent, raiseTo, playersBehind]);
 
   const selFreqs = selected ? strategy.hands.get(selected) : undefined;
   const combos = selected ? labelToCombos(selected) : [];
+  const bestColor = actionEvs?.rows.find((r) => r.key === actionEvs.best)?.color ?? '#2a323d';
 
   return (
     <div className="container" style={{ maxWidth: 1180 }}>
       <h1>프리플랍 차트 · 전략 + EV</h1>
       <p className="subtitle">
-        GTO Wizard 스타일로 스팟을 고르면 전략 그리드를, 핸드를 클릭하면 콤보별 EV를 봅니다. 100bb
-        6맥스 GTO 근사 + 셔브 EV 근사입니다.
+        스팟을 고르면 GTO 전략 그리드를, 핸드를 클릭하면 콤보별 액션 EV를 봅니다. 100bb 6맥스 GTO 근사
+        + 칩EV 근사입니다.
       </p>
 
-      {/* Spot / action bar */}
+      {/* Action-sequence / spot bar */}
       <div className="card" style={{ padding: 14 }}>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+          <div
+            style={{
+              padding: '6px 12px',
+              borderRadius: 8,
+              background: 'var(--bg-elevated)',
+              border: '1px solid var(--border)',
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            캐시 · {stackBB}bb
+          </div>
           {POSITIONS_6MAX.map((p) => {
             const isHero = p === heroPos;
             const isVillain = line === 'vs-RFI' && p === villainPos;
@@ -90,9 +119,9 @@ export default function ChartsPage() {
                   cursor: 'pointer',
                   padding: '6px 12px',
                   borderRadius: 8,
-                  border: '1px solid var(--border)',
-                  background: isHero ? 'var(--accent-dim)' : isVillain ? 'rgba(88,166,255,0.15)' : 'var(--bg-elevated)',
-                  color: isHero ? '#fff' : 'var(--text)',
+                  border: isHero ? '2px solid var(--accent)' : '1px solid var(--border)',
+                  background: isHero ? 'rgba(63,185,80,0.12)' : isVillain ? 'rgba(88,166,255,0.12)' : 'var(--bg-elevated)',
+                  color: 'var(--text)',
                   fontWeight: 600,
                   fontSize: 13,
                   textAlign: 'center',
@@ -100,8 +129,8 @@ export default function ChartsPage() {
                 }}
               >
                 <div>{p}</div>
-                <div style={{ fontSize: 11, opacity: 0.8 }}>
-                  {isHero ? '히어로' : isVillain ? '오프너' : `${stackBB}bb`}
+                <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
+                  {isHero ? (line === 'RFI' ? '오픈?' : '대응?') : isVillain ? '오프너' : `${stackBB}`}
                 </div>
               </div>
             );
@@ -135,7 +164,16 @@ export default function ChartsPage() {
             <input type="number" value={stackBB} onChange={(e) => setStackBB(Number(e.target.value) || 100)} />
           </div>
           <div>
-            <label>상대 콜 빈도(EV용): {callPercent}%</label>
+            <label>레이즈 사이즈 (BB)</label>
+            <input
+              type="number"
+              step={0.5}
+              value={raiseTo}
+              onChange={(e) => setRaiseTo(Number(e.target.value) || 2.5)}
+            />
+          </div>
+          <div>
+            <label>상대 콜/디펜드 %: {callPercent}</label>
             <input
               type="range"
               min={5}
@@ -167,7 +205,7 @@ export default function ChartsPage() {
       </div>
 
       {/* Grid + EV panel */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.4fr) minmax(260px, 1fr)', gap: 16, alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.35fr) minmax(280px, 1fr)', gap: 16, alignItems: 'start' }}>
         <div className="card">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <h2 style={{ margin: 0, fontSize: 16 }}>{strategy.label}</h2>
@@ -183,85 +221,87 @@ export default function ChartsPage() {
           </div>
           <ActionGrid data={gridData} colors={ACTION_COLORS} selected={selected} onSelect={setSelected} />
           <p className="muted" style={{ marginTop: 10 }}>
-            핸드를 클릭하면 오른쪽에 EV가 표시됩니다.
+            셀 색은 GTO 액션 비율(레이즈/콜/폴드 %)대로 칠해집니다. 핸드를 클릭하면 →
           </p>
         </div>
 
-        {/* EV panel */}
+        {/* EV panel — GTO-Wizard-style combo cards */}
         <div className="card">
           {selected ? (
             <>
-              <h2 style={{ marginTop: 0, fontSize: 16 }}>{selected} · 전략 + EV</h2>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                <h2 style={{ marginTop: 0, fontSize: 16 }}>{selected}</h2>
+                <span className="muted">전략 + EV</span>
+              </div>
 
-              {/* chart action mix */}
+              {/* GTO action mix (this colors the grid) */}
               {selFreqs && (
-                <div style={{ marginBottom: 14 }}>
-                  <div className="muted" style={{ marginBottom: 6 }}>차트 전략 (믹스)</div>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
                   {(['raise', 'call', 'fold'] as PreflopAction[]).map((a) => {
                     const f = selFreqs[a] ?? 0;
-                    const color = ACTION_COLORS.find((c) => c.action === a)!;
+                    const c = ACTION_COLORS.find((x) => x.action === a)!;
                     return (
-                      <div key={a} className="stat" style={{ borderBottom: 'none', padding: '4px 0' }}>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <span style={{ width: 10, height: 10, borderRadius: 2, background: color.color }} />
-                          {color.label}
-                        </span>
-                        <span className="val">{(f * 100).toFixed(0)}%</span>
+                      <div key={a} style={{ flex: 1, textAlign: 'center' }}>
+                        <div style={{ height: 6, borderRadius: 3, background: c.color, opacity: f > 0 ? 1 : 0.25 }} />
+                        <div style={{ fontSize: 12, marginTop: 4, fontWeight: 700 }}>{(f * 100).toFixed(0)}%</div>
+                        <div className="muted" style={{ fontSize: 11 }}>{c.label}</div>
                       </div>
                     );
                   })}
                 </div>
               )}
 
-              {/* approximate shove EV */}
-              {ev && (
-                <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-                  <div className="muted" style={{ marginBottom: 6 }}>
-                    셔브 EV 근사 (chip-EV, bb) · 상대 콜 {callPercent}%
-                  </div>
-                  <div className="stat">
-                    <span style={{ fontWeight: 700, color: ev.best === 'shove' ? 'var(--accent)' : 'var(--text)' }}>
-                      Allin {stackBB}
-                    </span>
-                    <span className="val" style={{ color: ev.evShove >= 0 ? 'var(--accent)' : 'var(--danger)' }}>
-                      {ev.evShove >= 0 ? '+' : ''}
-                      {ev.evShove.toFixed(2)}
-                    </span>
-                  </div>
-                  <div className="stat">
-                    <span style={{ fontWeight: ev.best === 'fold' ? 700 : 400 }}>Fold</span>
-                    <span className="val">0.00</span>
-                  </div>
-                  <div className="stat">
-                    <span>폴드 에쿼티</span>
-                    <span className="val">{(ev.foldEquity * 100).toFixed(0)}%</span>
-                  </div>
-                  <div className="stat">
-                    <span>콜 레인지 상대 에쿼티</span>
-                    <span className="val">{(ev.equityVsCall * 100).toFixed(1)}%</span>
-                  </div>
+              <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+                콤보별 액션 EV (chip-EV, bb · 근사)
+              </div>
+
+              {/* Per-combo cards */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                {combos.map((combo, i) => (
                   <div
-                    className="pill"
+                    key={i}
                     style={{
-                      marginTop: 10,
-                      background: ev.best === 'shove' ? 'rgba(63,185,80,0.15)' : 'rgba(248,81,73,0.15)',
-                      color: ev.best === 'shove' ? 'var(--accent)' : 'var(--danger)',
+                      border: `1px solid var(--border)`,
+                      borderLeft: `4px solid ${bestColor}`,
+                      borderRadius: 8,
+                      padding: 8,
+                      background: 'var(--bg-elevated)',
                     }}
                   >
-                    {ev.best === 'shove' ? '셔브 +EV' : '폴드'}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <PlayingCards cards={cardsToString(combo)} />
+                      <span className="muted" style={{ fontSize: 11 }}>EV</span>
+                    </div>
+                    {actionEvs?.rows.map((r) => {
+                      const isBest = r.key === actionEvs.best;
+                      return (
+                        <div
+                          key={r.key}
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            fontSize: 12,
+                            padding: '2px 4px',
+                            borderRadius: 4,
+                            background: isBest ? `${r.color}22` : 'transparent',
+                            fontWeight: isBest ? 700 : 400,
+                          }}
+                        >
+                          <span style={{ color: isBest ? r.color : 'var(--text)' }}>{r.label}</span>
+                          <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+                            {r.ev >= 0 ? '+' : ''}
+                            {r.ev.toFixed(2)}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
-                </div>
-              )}
-
-              {/* combos */}
-              <div style={{ marginTop: 14, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
-                <div className="muted" style={{ marginBottom: 8 }}>콤보 ({combos.length})</div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {combos.map((c, i) => (
-                    <PlayingCards key={i} cards={cardsToString(c)} />
-                  ))}
-                </div>
+                ))}
               </div>
+
+              <p className="muted" style={{ fontSize: 11, marginTop: 10 }}>
+                * 레이즈/올인 EV는 푸시폴드·오픈레이즈 칩EV 근사입니다. 최고 EV 액션이 강조됩니다.
+              </p>
             </>
           ) : (
             <p className="muted">그리드에서 핸드를 클릭하세요.</p>
