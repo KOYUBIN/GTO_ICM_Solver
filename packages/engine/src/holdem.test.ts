@@ -235,3 +235,35 @@ function mkSeat(id: string, stack: number, status: Seat['status'], committedTota
     hasActed: true,
   };
 }
+
+// ---------- regression: blind puts the first actor all-in ----------
+
+test('heads-up: a blind that puts the button all-in does not stall the hand', () => {
+  // Button/SB has only 1 chip and blinds are 10/20 -> SB posts all-in for 1.
+  let s = game([1, 1000], 10, 20, 0, 7);
+  s = startHand(s);
+  const total = s.seats.reduce((a, x) => a + x.stack, 0) + s.pots.reduce((a, p) => a + p.amount, 0);
+  // Either action is on someone who can act, or the hand already ran out.
+  if (s.handInProgress) {
+    const la = legalActions(s);
+    assert.ok(la.actions.length > 0, 'the seat to act must have legal actions');
+    assert.equal(s.seats[s.toAct].status, 'active');
+  }
+  // No chips created or destroyed.
+  assert.equal(total, 1001);
+});
+
+test('blinds putting everyone all-in runs out to showdown with conserved chips', () => {
+  // Both players are shorter than the blinds -> both all-in on the post.
+  let s = game([3, 6], 10, 20, 0, 11);
+  s = startHand(s);
+  // Drive any remaining actions to completion.
+  let guard = 0;
+  while (s.handInProgress && guard++ < 50) {
+    const la = legalActions(s);
+    if (!la.actions.length) break;
+    s = applyAction(s, s.seats[s.toAct].id, { type: la.actions.includes('check') ? 'check' : 'call' });
+  }
+  assert.equal(s.handInProgress, false);
+  assert.equal(s.seats.reduce((a, x) => a + x.stack, 0), 9);
+});

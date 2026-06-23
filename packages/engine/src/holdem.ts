@@ -263,12 +263,14 @@ export function startHand(state: TableState): TableState {
   s.currentBet = Math.max(sbSeat.committedThisStreet, bbSeat.committedThisStreet, s.bigBlind);
   s.minRaise = s.bigBlind;
 
-  // Deal two hole cards each, starting left of the button.
+  // Deal two hole cards each, starting left of the button. Deal to everyone in
+  // the hand — including players a blind/ante just put all-in (status 'allin').
+  const dealt: SeatStatus[] = ['active', 'allin'];
   for (let round = 0; round < 2; round++) {
-    let idx = nextSeat(s, s.button, ['active']);
+    let idx = nextSeat(s, s.button, dealt);
     for (let k = 0; k < playing.length; k++) {
       s.seats[idx].holeCards.push(s.deck.shift()!);
-      idx = nextSeat(s, idx, ['active']);
+      idx = nextSeat(s, idx, dealt);
     }
   }
 
@@ -277,6 +279,27 @@ export function startHand(state: TableState): TableState {
   // (heads-up: the SB/button acts first).
   s.toAct = heads ? sbIdx : nextSeat(s, bbIdx, ['active']);
   s.handInProgress = true;
+  // A blind can put the first-to-act seat all-in (very short stack). Make sure
+  // action lands on someone who can actually act, or run the board out.
+  return ensureActionable(s);
+}
+
+/**
+ * Guarantee `toAct` points at a seat that can voluntarily act. If the intended
+ * actor is all-in/folded, skip to the next active seat; if nobody can act
+ * (e.g. blinds put everyone all-in), settle the hand by running out the board.
+ */
+function ensureActionable(s: TableState): TableState {
+  const live = liveSeats(s);
+  if (live.length <= 1) {
+    return live.length === 1 ? finishUncontested(s, live[0]) : s;
+  }
+  if (s.toAct >= 0 && s.seats[s.toAct].status !== 'active') {
+    s.toAct = nextSeat(s, s.toAct, ['active']);
+  }
+  if (s.toAct < 0 || roundClosed(s)) {
+    return nextStreet(s);
+  }
   return s;
 }
 
