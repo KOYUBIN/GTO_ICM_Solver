@@ -37,13 +37,13 @@ export default function PlayPage() {
   const [room, setRoom] = useState<RoomView | null>(null);
   const [error, setError] = useState('');
 
-  // Restore a session from localStorage on mount.
+  // Restore a session from localStorage on mount (seated or spectating).
   useEffect(() => {
     const r = localStorage.getItem(LS_ROOM);
     const p = localStorage.getItem(LS_PLAYER);
-    if (r && p) {
+    if (r) {
       setRoomId(r);
-      setPlayerId(p);
+      if (p) setPlayerId(p);
     }
   }, []);
 
@@ -74,6 +74,14 @@ export default function PlayPage() {
     setPlayerId(pid);
   }
 
+  function spectate(id: string) {
+    localStorage.setItem(LS_ROOM, id);
+    localStorage.removeItem(LS_PLAYER);
+    setRoomId(id);
+    setPlayerId(null);
+    setRoom(null);
+  }
+
   function leave() {
     localStorage.removeItem(LS_ROOM);
     localStorage.removeItem(LS_PLAYER);
@@ -102,7 +110,7 @@ export default function PlayPage() {
     }
   }
 
-  if (roomId && playerId) {
+  if (roomId) {
     return (
       <div className="container">
         {error && <p style={{ color: 'var(--danger)' }}>{error}</p>}
@@ -115,12 +123,18 @@ export default function PlayPage() {
     );
   }
 
-  return <Landing onEnter={enterRoom} />;
+  return <Landing onEnter={enterRoom} onSpectate={spectate} />;
 }
 
 // ---------- landing: create / join ----------
 
-function Landing({ onEnter }: { onEnter: (id: string, pid: string, name: string) => void }) {
+function Landing({
+  onEnter,
+  onSpectate,
+}: {
+  onEnter: (id: string, pid: string, name: string) => void;
+  onSpectate: (id: string) => void;
+}) {
   const [name, setName] = useState('');
   const [presetId, setPresetId] = useState('classic');
   const [roomName, setRoomName] = useState('');
@@ -346,12 +360,23 @@ function Landing({ onEnter }: { onEnter: (id: string, pid: string, name: string)
               onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
             />
           </div>
-          <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
             <button className="secondary" onClick={onJoin} disabled={busy}>
               참가
             </button>
+            <button
+              className="secondary"
+              onClick={() => joinCode.trim() && onSpectate(joinCode.trim().toUpperCase())}
+              disabled={!joinCode.trim()}
+              title="좌석 없이 관전만 합니다"
+            >
+              관전
+            </button>
           </div>
         </div>
+        <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+          관전은 좌석 없이 테이블을 구경합니다 (카드는 쇼다운 때 공개).
+        </p>
       </div>
 
       {error && <p style={{ color: 'var(--danger)' }}>{error}</p>}

@@ -26,10 +26,12 @@ import {
   applyAction,
   redactFor,
   legalActions,
+  getPreset,
   type TableState,
   type Action,
+  type BlindLevel,
 } from '@gto/engine';
-import type { Room, RoomConfig, RoomView } from './rooms';
+import type { Room, RoomConfig, RoomView, TournamentClock } from './rooms';
 
 const usePg = !!process.env.POSTGRES_URL;
 export const ROOM_STORE_BACKEND = usePg ? 'postgres' : 'file';
@@ -48,6 +50,15 @@ function genId(prefix: string): string {
   return `${prefix}${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
 }
 
+/** Resolve the blind-level ladder for a config (preset ladder or single level). */
+function resolveLevels(config: RoomConfig): BlindLevel[] {
+  if (config.levels && config.levels.length) return config.levels;
+  if (config.presetId && config.presetId !== 'custom') {
+    return getPreset(config.presetId).levels;
+  }
+  return [{ level: 1, smallBlind: config.smallBlind, bigBlind: config.bigBlind, ante: config.ante }];
+}
+
 function newRoom(name: string, hostName: string, config: RoomConfig): { room: Room; playerId: string } {
   const hostId = genId('u');
   const now = new Date().toISOString();
@@ -56,12 +67,46 @@ function newRoom(name: string, hostName: string, config: RoomConfig): { room: Ro
     name: name || '홀덤 테이블',
     hostId,
     players: [{ id: hostId, name: hostName || '호스트', seat: 0 }],
-    config,
+    config: { ...config, levels: resolveLevels(config) },
     gameState: null,
     createdAt: now,
     updatedAt: now,
   };
   return { room, playerId: hostId };
+}
+
+/** Current 0-based blind level from elapsed time (clamped). 0 for cash. */
+function currentLevelIndex(room: Room): number {
+  const lvls = room.config.levels ?? [];
+  if (lvls.length <= 1 || room.config.levelMinutes <= 0 || !room.startedAt) return 0;
+  const elapsedMin = (Date.now() - new Date(room.startedAt).getTime()) / 60000;
+  return Math.min(lvls.length - 1, Math.floor(elapsedMin / room.config.levelMinutes));
+}
+
+/** Live tournament clock for the UI (null for cash / no ladder). */
+function computeClock(room: Room): TournamentClock | null {
+  const lvls = room.config.levels ?? [];
+  if (lvls.length <= 1 || room.config.levelMinutes <= 0) return null;
+  const idx = currentLevelIndex(room);
+  const lvl = lvls[idx];
+  const next = lvls[idx + 1];
+  let secondsLeft = 0;
+  if (room.startedAt) {
+    const elapsedSec = (Date.now() - new Date(room.startedAt).getTime()) / 1000;
+    const levelLen = room.config.levelMinutes * 60;
+    secondsLeft = Math.max(0, Math.ceil(levelLen - (elapsedSec - idx * levelLen)));
+    if (idx === lvls.length - 1) secondsLeft = 0;
+  }
+  return {
+    level: lvl.level,
+    smallBlind: lvl.smallBlind,
+    bigBlind: lvl.bigBlind,
+    ante: lvl.ante,
+    levelMinutes: room.config.levelMinutes,
+    secondsLeft,
+    next: next ? { smallBlind: next.smallBlind, bigBlind: next.bigBlind, ante: next.ante } : undefined,
+    isLastLevel: idx === lvls.length - 1,
+  };
 }
 
 /** Add a player to a room (mutates and returns the new player's id), or null. */
@@ -90,10 +135,17 @@ function dealNext(room: Room): TableState {
   let state = room.gameState;
   if (!state) {
     state = freshGame(room);
+    room.startedAt = new Date().toISOString(); // start the blind clock
   } else {
     // Sync any players who joined since the table was created (seat them with a
     // starting stack), then deal the next hand keeping existing stacks.
     state = syncSeats(state, room);
+  }
+  // Apply the current tournament blind level (no-op for cash / single level).
+  const lvls = room.config.levels ?? [];
+  if (lvls.length > 1 && room.config.levelMinutes > 0) {
+    const lvl = lvls[currentLevelIndex(room)];
+    state = { ...state, smallBlind: lvl.smallBlind, bigBlind: lvl.bigBlind, ante: lvl.ante };
   }
   const next = startHand(state);
   room.gameState = next;
@@ -134,6 +186,7 @@ function applyRoomAction(room: Room, playerId: string, action: Action): TableSta
 /** Public per-viewer view: redact opponents' cards + attach legal actions. */
 export function toView(room: Room, viewerId?: string): RoomView {
   const view: RoomView = { ...room, you: viewerId };
+  view.clock = computeClock(room);
   if (room.gameState) {
     view.gameState = redactFor(room.gameState, viewerId);
     // Only expose legal actions to the player whose turn it is.

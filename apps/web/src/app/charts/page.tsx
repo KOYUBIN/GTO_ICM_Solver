@@ -7,6 +7,8 @@ import {
   openRaiseEv,
   realizationFor,
   topPercentRange,
+  parseRange,
+  rangePercent,
   labelToCombos,
   comboCount,
   cardsToString,
@@ -374,6 +376,21 @@ function EquityChart({
 }) {
   const [rows, setRows] = useState<{ label: string; eq: number; weight: number }[] | null>(null);
   const [busy, setBusy] = useState(false);
+  // Editable opponent range — defaults to a wide defend range; users can type
+  // any solver-notation range to compute equity against it.
+  const [oppText, setOppText] = useState('22+, A2s+, K9s+, Q9s+, J9s+, T9s, A8o+, KTo+, QJo');
+  const [useCustomOpp, setUseCustomOpp] = useState(false);
+
+  const customOpp = useMemo(() => {
+    try {
+      const r = parseRange(oppText);
+      return r.size ? r : null;
+    } catch {
+      return null;
+    }
+  }, [oppText]);
+  const opp = useCustomOpp && customOpp ? customOpp : oppRange;
+  const oppPct = rangePercent(opp);
 
   const raiseHands = useMemo(
     () =>
@@ -388,7 +405,7 @@ function EquityChart({
     setTimeout(() => {
       const out = raiseHands.map(({ label, weight }) => {
         const hero = cardsToString(labelToCombos(label)[0]);
-        const eq = equityVsRanges(hero, [oppRange], { iterations: 1200, seed: 99 });
+        const eq = equityVsRanges(hero, [opp], { iterations: 1200, seed: 99 });
         return { label, eq: eq.equities[0], weight };
       });
       out.sort((a, b) => b.eq - a.eq);
@@ -411,8 +428,34 @@ function EquityChart({
         </button>
       </div>
       <p className="muted" style={{ marginTop: 0 }}>
-        현재 스팟의 레이즈 레인지 각 핸드가 상대 디펜드 레인지 대비 갖는 에쿼티를 정렬해 보여줍니다.
+        현재 스팟의 레이즈 레인지 각 핸드가 상대 레인지 대비 갖는 에쿼티를 정렬해 보여줍니다.
       </p>
+
+      <div style={{ marginBottom: 12 }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <input
+            type="checkbox"
+            checked={useCustomOpp}
+            onChange={(e) => setUseCustomOpp(e.target.checked)}
+            style={{ width: 'auto' }}
+          />
+          상대 레인지 직접 지정 ({useCustomOpp ? '사용자 지정' : '차트 디펜드 레인지'} · {oppPct.toFixed(1)}%)
+        </label>
+        <input
+          type="text"
+          value={oppText}
+          onChange={(e) => setOppText(e.target.value)}
+          disabled={!useCustomOpp}
+          placeholder="예: 22+, ATs+, KQs, AJo+"
+          style={{ opacity: useCustomOpp ? 1 : 0.5 }}
+        />
+        {useCustomOpp && !customOpp && (
+          <p className="muted" style={{ color: 'var(--danger)', marginTop: 4 }}>
+            레인지를 해석할 수 없습니다.
+          </p>
+        )}
+      </div>
+
       {!rows && <p className="muted">«계산»을 눌러 몬테카를로 에쿼티 분포를 생성하세요.</p>}
       {rows && (
         <>

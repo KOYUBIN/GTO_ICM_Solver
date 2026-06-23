@@ -1,20 +1,22 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { cardToString, type TableState, type Action, type Seat } from '@gto/engine';
 import type { RoomView } from '@/lib/rooms';
+import { sfx, primeAudio } from './sounds';
 
 const SUIT_GLYPH: Record<string, string> = { c: '♣', d: '♦', h: '♥', s: '♠' };
 const RED = new Set(['h', 'd']);
 
 /** Render an engine Card (-1 = face down). */
-function Card({ card, small }: { card: number; small?: boolean }) {
+function Card({ card, small, deal }: { card: number; small?: boolean; deal?: boolean }) {
   const w = small ? 26 : 30;
   const h = small ? 36 : 42;
+  const cls = deal ? ' card-deal' : '';
   if (card < 0) {
     return (
       <span
-        className="playing-card"
+        className={`playing-card${cls}`}
         style={{
           width: w,
           height: h,
@@ -28,15 +30,10 @@ function Card({ card, small }: { card: number; small?: boolean }) {
     );
   }
   const str = cardToString(card);
-  const rank = str[0];
-  const suit = str[1];
   return (
-    <span
-      className={`playing-card${RED.has(suit) ? ' red' : ''}`}
-      style={{ width: w, height: h }}
-    >
-      {rank}
-      {SUIT_GLYPH[suit]}
+    <span className={`playing-card${RED.has(str[1]) ? ' red' : ''}${cls}`} style={{ width: w, height: h }}>
+      {str[0]}
+      {SUIT_GLYPH[str[1]]}
     </span>
   );
 }
@@ -62,6 +59,31 @@ const STREET_KO: Record<string, string> = {
   showdown: '쇼다운',
 };
 
+const LS_SOUND = 'gto-play-sound';
+
+/** Play short sound cues when the table state changes between polls. */
+function useTableSounds(room: RoomView, youId: string | null, enabled: boolean) {
+  const prev = useRef<{ toAct?: string; hand?: number; winners?: number; level?: number } | null>(null);
+  useEffect(() => {
+    const st = room.gameState;
+    const toAct = st && st.toAct >= 0 ? st.seats[st.toAct]?.id : undefined;
+    const hand = st?.handNumber;
+    const winners = st?.winners.length ?? 0;
+    const level = room.clock?.level;
+    const p = prev.current;
+    if (enabled && p) {
+      if (level !== undefined && p.level !== undefined && level > p.level) sfx('levelup');
+      if (hand !== undefined && p.hand !== undefined && hand > p.hand) sfx('deal');
+      if (winners > 0 && (p.winners ?? 0) === 0) sfx('win');
+      if (toAct !== p.toAct) {
+        if (youId && toAct === youId) sfx('turn');
+        else if (toAct) sfx('action');
+      }
+    }
+    prev.current = { toAct, hand, winners, level };
+  }, [room, youId, enabled]);
+}
+
 export function Table({
   room,
   youId,
@@ -70,24 +92,39 @@ export function Table({
   onLeave,
 }: {
   room: RoomView;
-  youId: string;
+  youId: string | null; // null = spectator
   onAction: (a: Action) => void;
   onDeal: () => void;
   onLeave: () => void;
 }) {
   const state = room.gameState;
-  const isHost = room.hostId === youId;
+  const isHost = !!youId && room.hostId === youId;
+  const spectating = !youId;
 
-  const potTotal = useMemo(() => {
-    if (!state) return 0;
-    return state.pots.reduce((a, p) => a + p.amount, 0);
-  }, [state]);
+  const [soundOn, setSoundOn] = useState(false);
+  useEffect(() => {
+    setSoundOn(localStorage.getItem(LS_SOUND) === '1');
+  }, []);
+  function toggleSound() {
+    primeAudio();
+    setSoundOn((v) => {
+      const next = !v;
+      localStorage.setItem(LS_SOUND, next ? '1' : '0');
+      return next;
+    });
+  }
+  useTableSounds(room, youId, soundOn);
+
+  const potTotal = useMemo(() => (state ? state.pots.reduce((a, p) => a + p.amount, 0) : 0), [state]);
 
   return (
     <div>
       <div className="row" style={{ alignItems: 'center', marginBottom: 16 }}>
         <div style={{ flex: 2 }}>
-          <h1 style={{ marginBottom: 2 }}>{room.name}</h1>
+          <h1 style={{ marginBottom: 2 }}>
+            {room.name}
+            {spectating && <span className="pill" style={{ marginLeft: 10, background: 'var(--bg-elevated)', color: 'var(--blue)' }}>관전 중</span>}
+          </h1>
           <p className="muted" style={{ margin: 0 }}>
             방 코드 <strong style={{ color: 'var(--accent)', letterSpacing: 2 }}>{room.id}</strong> ·{' '}
             {room.config.presetName} · {room.config.smallBlind}/{room.config.bigBlind}
@@ -95,32 +132,43 @@ export function Table({
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', alignItems: 'center', flex: 1 }}>
-          <button
-            className="secondary"
-            onClick={() => navigator.clipboard?.writeText(room.id)}
-            title="방 코드 복사"
-          >
+          <button className="secondary" onClick={toggleSound} title="소리 켜기/끄기">
+            {soundOn ? '🔊' : '🔇'}
+          </button>
+          <button className="secondary" onClick={() => navigator.clipboard?.writeText(room.id)} title="방 코드 복사">
             코드 복사
           </button>
           <button className="secondary" onClick={onLeave}>
-            나가기
+            {spectating ? '관전 종료' : '나가기'}
           </button>
         </div>
       </div>
 
+      {room.clock && <ClockBar clock={room.clock} />}
+
       {!state ? (
-        <Lobby room={room} isHost={isHost} onDeal={onDeal} />
+        <Lobby room={room} isHost={isHost} spectating={spectating} onDeal={onDeal} />
       ) : (
         <>
           <Felt state={state} youId={youId} potTotal={potTotal} />
-          <ActionBar
-            state={state}
-            youId={youId}
-            legal={room.legal ?? null}
-            onAction={onAction}
-            isHost={isHost}
-            onDeal={onDeal}
-          />
+          {!spectating && (
+            <ActionBar
+              state={state}
+              youId={youId}
+              legal={room.legal ?? null}
+              onAction={(a) => {
+                primeAudio();
+                onAction(a);
+              }}
+              isHost={isHost}
+              onDeal={onDeal}
+            />
+          )}
+          {spectating && (
+            <div className="card">
+              <span className="muted">관전 모드입니다. 카드는 쇼다운 때 공개됩니다.</span>
+            </div>
+          )}
           <HandLog log={state.log} />
         </>
       )}
@@ -128,13 +176,53 @@ export function Table({
   );
 }
 
+function ClockBar({ clock }: { clock: NonNullable<RoomView['clock']> }) {
+  const mm = Math.floor(clock.secondsLeft / 60);
+  const ss = clock.secondsLeft % 60;
+  return (
+    <div className="clock-bar">
+      <div>
+        <div className="muted" style={{ fontSize: 12 }}>레벨</div>
+        <div style={{ fontWeight: 700, fontSize: 18 }}>Lv.{clock.level}</div>
+      </div>
+      <div>
+        <div className="muted" style={{ fontSize: 12 }}>블라인드</div>
+        <div style={{ fontWeight: 700 }}>
+          {clock.smallBlind}/{clock.bigBlind}
+          {clock.ante ? ` (A${clock.ante})` : ''}
+        </div>
+      </div>
+      {!clock.isLastLevel && (
+        <div>
+          <div className="muted" style={{ fontSize: 12 }}>다음 레벨까지</div>
+          <div className="clock-time" style={{ color: clock.secondsLeft <= 30 ? 'var(--warn)' : 'var(--text)' }}>
+            {mm}:{ss.toString().padStart(2, '0')}
+          </div>
+        </div>
+      )}
+      {clock.next && (
+        <div>
+          <div className="muted" style={{ fontSize: 12 }}>다음</div>
+          <div className="muted">
+            {clock.next.smallBlind}/{clock.next.bigBlind}
+            {clock.next.ante ? ` (A${clock.next.ante})` : ''}
+          </div>
+        </div>
+      )}
+      {clock.isLastLevel && <div className="muted">최종 레벨</div>}
+    </div>
+  );
+}
+
 function Lobby({
   room,
   isHost,
+  spectating,
   onDeal,
 }: {
   room: RoomView;
   isHost: boolean;
+  spectating: boolean;
   onDeal: () => void;
 }) {
   return (
@@ -149,7 +237,9 @@ function Lobby({
           </span>
         ))}
       </div>
-      {isHost ? (
+      {spectating ? (
+        <p className="muted">관전 중 — 호스트가 게임을 시작하길 기다립니다.</p>
+      ) : isHost ? (
         <button onClick={onDeal} disabled={room.players.length < 2}>
           {room.players.length < 2 ? '플레이어 2명 이상 필요' : '딜 시작'}
         </button>
@@ -160,15 +250,7 @@ function Lobby({
   );
 }
 
-function Felt({
-  state,
-  youId,
-  potTotal,
-}: {
-  state: TableState;
-  youId: string;
-  potTotal: number;
-}) {
+function Felt({ state, youId, potTotal }: { state: TableState; youId: string | null; potTotal: number }) {
   const toActId = state.toAct >= 0 ? state.seats[state.toAct]?.id : undefined;
   const winnerIds = new Set(state.winners.map((w) => w.seatId));
 
@@ -181,16 +263,18 @@ function Felt({
         padding: 24,
       }}
     >
-      {/* Board + pot in the center */}
       <div style={{ textAlign: 'center', marginBottom: 20 }}>
         <div className="muted" style={{ marginBottom: 6 }}>
-          {STREET_KO[state.currentStreet]} · 팟 {potTotal.toLocaleString()}
+          {STREET_KO[state.currentStreet]} · 팟{' '}
+          <span key={potTotal} className="pot-bump" style={{ fontWeight: 700, color: 'var(--text)' }}>
+            {potTotal.toLocaleString()}
+          </span>
         </div>
         <div style={{ display: 'flex', justifyContent: 'center', gap: 6, minHeight: 42 }}>
           {state.board.length === 0 ? (
             <span className="muted">— 보드 —</span>
           ) : (
-            state.board.map((c, i) => <Card key={i} card={c} />)
+            state.board.map((c, i) => <Card key={`${i}-${c}`} card={c} deal />)
           )}
         </div>
         {state.pots.length > 1 && (
@@ -200,16 +284,9 @@ function Felt({
         )}
       </div>
 
-      {/* Seats grid */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-          gap: 12,
-        }}
-      >
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
         {state.seats.map((seat, idx) => {
-          const isYou = seat.id === youId;
+          const isYou = !!youId && seat.id === youId;
           const isTurn = seat.id === toActId;
           const isButton = idx === state.button;
           const isWinner = winnerIds.has(seat.id);
@@ -217,15 +294,13 @@ function Felt({
           return (
             <div
               key={seat.id}
+              className={isTurn ? 'seat-turn' : isWinner ? 'seat-winner' : ''}
               style={{
                 background: isYou ? 'var(--bg-card)' : 'var(--bg-elevated)',
-                border: `2px solid ${
-                  isTurn ? 'var(--accent)' : isWinner ? 'var(--warn)' : 'var(--border)'
-                }`,
+                border: `2px solid ${isTurn ? 'var(--accent)' : isWinner ? 'var(--warn)' : 'var(--border)'}`,
                 borderRadius: 10,
                 padding: 12,
                 opacity: seat.status === 'folded' ? 0.55 : 1,
-                boxShadow: isTurn ? '0 0 0 2px rgba(63,185,80,0.25)' : undefined,
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -245,7 +320,7 @@ function Felt({
               </div>
               <div style={{ display: 'flex', gap: 4 }}>
                 {seat.holeCards.length ? (
-                  seat.holeCards.map((c, i) => <Card key={i} card={c} small />)
+                  seat.holeCards.map((c, i) => <Card key={`${i}-${c}`} card={c} small deal />)
                 ) : (
                   <span className="muted" style={{ fontSize: 12 }}>—</span>
                 )}
@@ -273,13 +348,13 @@ function ActionBar({
   onDeal,
 }: {
   state: TableState;
-  youId: string;
+  youId: string | null;
   legal: RoomView['legal'];
   onAction: (a: Action) => void;
   isHost: boolean;
   onDeal: () => void;
 }) {
-  const myTurn = state.toAct >= 0 && state.seats[state.toAct]?.id === youId;
+  const myTurn = !!youId && state.toAct >= 0 && state.seats[state.toAct]?.id === youId;
   const showdown = state.currentStreet === 'showdown' || !state.handInProgress;
 
   if (showdown) {
@@ -307,17 +382,9 @@ function ActionBar({
   return <MyActions legal={legal} onAction={onAction} />;
 }
 
-function MyActions({
-  legal,
-  onAction,
-}: {
-  legal: NonNullable<RoomView['legal']>;
-  onAction: (a: Action) => void;
-}) {
+function MyActions({ legal, onAction }: { legal: NonNullable<RoomView['legal']>; onAction: (a: Action) => void }) {
   const canRaise = legal.actions.includes('bet') || legal.actions.includes('raise');
   const [amount, setAmount] = useState(legal.minRaiseTo);
-
-  // Keep the slider within the current legal window.
   const clamped = Math.min(Math.max(amount, legal.minRaiseTo), legal.maxRaiseTo);
   const raiseType: Action['type'] = legal.actions.includes('bet') ? 'bet' : 'raise';
 
@@ -343,10 +410,7 @@ function MyActions({
           </button>
         )}
         {legal.actions.includes('allin') && (
-          <button
-            onClick={() => onAction({ type: 'allin' })}
-            style={{ background: 'var(--warn)' }}
-          >
+          <button onClick={() => onAction({ type: 'allin' })} style={{ background: 'var(--warn)' }}>
             올인 {legal.maxRaiseTo.toLocaleString()}
           </button>
         )}
