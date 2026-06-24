@@ -11,6 +11,7 @@ const LINKS = [
   { href: '/pushfold', label: '푸시/폴드' },
   { href: '/solver', label: '솔버' },
   { href: '/analyze', label: '핸드분석' },
+  { href: '/replay', label: '리플레이' },
   { href: '/icm', label: 'ICM' },
   { href: '/play', label: '홀덤' },
   { href: '/community', label: '커뮤니티' },
