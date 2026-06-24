@@ -151,31 +151,45 @@ export function Table({
       ) : (
         <>
           <Felt state={state} youId={youId} potTotal={potTotal} />
-          {state.handInProgress && room.deadline && room.serverNow && room.config.actionTimeoutSec ? (
-            <TurnTimer
-              deadline={room.deadline}
-              serverNow={room.serverNow}
-              total={room.config.actionTimeoutSec}
-              who={state.toAct >= 0 ? state.seats[state.toAct]?.name ?? '' : ''}
-            />
-          ) : null}
-          {!spectating && (
-            <ActionBar
-              state={state}
-              youId={youId}
-              legal={room.legal ?? null}
-              onAction={(a) => {
-                primeAudio();
-                onAction(a);
-              }}
-              isHost={isHost}
-              onDeal={onDeal}
-            />
-          )}
-          {spectating && (
-            <div className="card">
-              <span className="muted">관전 모드입니다. 카드는 쇼다운 때 공개됩니다.</span>
+          {room.gameOver ? (
+            <div className="card" style={{ textAlign: 'center', border: '2px solid var(--warn)' }}>
+              <h2 style={{ margin: '4px 0' }}>🏆 게임 종료</h2>
+              <p style={{ margin: '4px 0 12px' }}>
+                우승: <strong style={{ color: 'var(--warn)', fontSize: 18 }}>{room.overallWinner ?? '—'}</strong>
+              </p>
+              <button className="secondary" onClick={onLeave}>
+                {spectating ? '관전 종료' : '테이블 나가기'}
+              </button>
             </div>
+          ) : (
+            <>
+              {state.handInProgress && room.deadline && room.serverNow && room.config.actionTimeoutSec ? (
+                <TurnTimer
+                  deadline={room.deadline}
+                  serverNow={room.serverNow}
+                  total={room.config.actionTimeoutSec}
+                  who={state.toAct >= 0 ? state.seats[state.toAct]?.name ?? '' : ''}
+                />
+              ) : null}
+              {!spectating && (
+                <ActionBar
+                  state={state}
+                  youId={youId}
+                  legal={room.legal ?? null}
+                  onAction={(a) => {
+                    primeAudio();
+                    onAction(a);
+                  }}
+                  isHost={isHost}
+                  onDeal={onDeal}
+                />
+              )}
+              {spectating && (
+                <div className="card">
+                  <span className="muted">관전 모드입니다. 카드는 쇼다운 때 공개됩니다.</span>
+                </div>
+              )}
+            </>
           )}
           <HandLog log={state.log} />
         </>
@@ -339,6 +353,7 @@ function Felt({ state, youId, potTotal }: { state: TableState; youId: string | n
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
         {state.seats.map((seat, idx) => {
+          if (seat.status === 'empty') return null; // a seat someone left
           const isYou = !!youId && seat.id === youId;
           const isTurn = seat.id === toActId;
           const isButton = idx === state.button;

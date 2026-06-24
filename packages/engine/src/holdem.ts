@@ -436,6 +436,34 @@ export function applyAction(state: TableState, seatId: string, action: Action): 
   return advance(s);
 }
 
+/**
+ * A player forfeits / leaves the table mid-hand. An active player is folded
+ * (advancing the turn or ending the hand as needed); an all-in player stays in
+ * for the showdown (their committed chips remain live). If the hand isn't
+ * running, the seat is simply marked sitting-out.
+ */
+export function forfeit(state: TableState, seatId: string): TableState {
+  const s = cloneState(state);
+  const idx = seatIndex(s, seatId);
+  if (idx < 0) return s;
+  const seat = s.seats[idx];
+
+  if (!s.handInProgress) {
+    if (seat.status !== 'empty') seat.status = 'sittingOut';
+    return s;
+  }
+  if (seat.status !== 'active') return s; // all-in stays live; folded/out no-op
+
+  const wasToAct = s.toAct === idx;
+  seat.status = 'folded';
+  s.log.push(`${seat.name} 나감 (폴드)`);
+
+  if (wasToAct) return advance(s);
+  const live = liveSeats(s);
+  if (live.length === 1) return finishUncontested(s, live[0]);
+  return s;
+}
+
 /** A full raise re-opens the betting: everyone else must act again. */
 function reopenAction(s: TableState, raiserIdx: number): void {
   for (let i = 0; i < s.seats.length; i++) {

@@ -7,6 +7,7 @@ import {
   legalActions,
   applyAction,
   buildPots,
+  forfeit,
   type TableState,
   type Seat,
 } from './holdem.js';
@@ -266,4 +267,33 @@ test('blinds putting everyone all-in runs out to showdown with conserved chips',
   }
   assert.equal(s.handInProgress, false);
   assert.equal(s.seats.reduce((a, x) => a + x.stack, 0), 9);
+});
+
+// ---------- forfeit / leave ----------
+
+test('forfeit: the player to act folds and the turn advances', () => {
+  let s = game([1000, 1000, 1000]);
+  s = startHand(s); // 3-handed, first to act = button (p0)
+  const actor = s.seats[s.toAct].id;
+  const before = s.toAct;
+  s = forfeit(s, actor);
+  assert.equal(s.seats.find((x) => x.id === actor)!.status, 'folded');
+  assert.ok(s.toAct !== before || !s.handInProgress);
+});
+
+test('forfeit: heads-up opponent leaving ends the hand uncontested', () => {
+  let s = game([1000, 1000]);
+  s = startHand(s);
+  // The player NOT to act leaves -> only one live seat -> uncontested win.
+  const notToAct = s.seats[(s.toAct + 1) % 2].id;
+  s = forfeit(s, notToAct);
+  assert.equal(s.handInProgress, false);
+  // Chips conserved at the starting bankroll.
+  assert.equal(s.seats.reduce((a, x) => a + x.stack, 0), 2000);
+});
+
+test('forfeit: outside a hand just sits the player out', () => {
+  let s = game([1000, 1000]);
+  s = forfeit(s, s.seats[0].id);
+  assert.equal(s.seats[0].status, 'sittingOut');
 });
