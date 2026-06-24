@@ -67,7 +67,12 @@ function newRoom(name: string, hostName: string, config: RoomConfig): { room: Ro
     name: name || '홀덤 테이블',
     hostId,
     players: [{ id: hostId, name: hostName || '호스트', seat: 0 }],
-    config: { ...config, levels: resolveLevels(config) },
+    config: {
+      ...config,
+      levels: resolveLevels(config),
+      actionTimeoutSec: config.actionTimeoutSec ?? 30,
+      autoNextHand: config.autoNextHand ?? true,
+    },
     gameState: null,
     createdAt: now,
     updatedAt: now,
@@ -149,8 +154,89 @@ function dealNext(room: Room): TableState {
   }
   const next = startHand(state);
   room.gameState = next;
+  syncTimers(room);
   room.updatedAt = new Date().toISOString();
   return next;
+}
+
+/** Reset the action/hand-end timestamps to match the current game state. */
+function syncTimers(room: Room): void {
+  const st = room.gameState;
+  if (st && st.handInProgress && st.toAct >= 0) {
+    room.actingSince = new Date().toISOString();
+    room.handEndedAt = undefined;
+  } else {
+    room.actingSince = undefined;
+    if (st && !st.handInProgress && !room.handEndedAt) room.handEndedAt = new Date().toISOString();
+  }
+}
+
+/**
+ * Auto-act for players who ran out the action clock (lazy enforcement on poll).
+ * Uses a virtual clock so several consecutive timeouts settle in one pass:
+ * each timed-out player's successor starts when the predecessor expired.
+ */
+function tickTimeouts(room: Room): boolean {
+  const timeout = room.config.actionTimeoutSec ?? 0;
+  if (timeout <= 0 || !room.actingSince) return false;
+  let st = room.gameState;
+  if (!st || !st.handInProgress) return false;
+
+  let changed = false;
+  let deadline = new Date(room.actingSince).getTime() + timeout * 1000;
+  let guard = 0;
+  while (st && st.handInProgress && st.toAct >= 0 && Date.now() >= deadline && guard++ < 40) {
+    const la = legalActions(st);
+    if (!la.actions.length) break;
+    const seatId = st.seats[st.toAct].id;
+    const act: Action = la.actions.includes('check') ? { type: 'check' } : { type: 'fold' };
+    st.log.push(`⏱ ${st.seats[st.toAct].name} 시간 초과 — 자동 ${act.type === 'check' ? '체크' : '폴드'}`);
+    st = applyAction(st, seatId, act);
+    room.gameState = st;
+    changed = true;
+    room.actingSince = new Date(deadline).toISOString();
+    deadline += timeout * 1000;
+  }
+  if (changed) {
+    // The hand may have ended on a timeout fold; resync the timestamps.
+    if (!room.gameState?.handInProgress) {
+      room.actingSince = undefined;
+      if (!room.handEndedAt) room.handEndedAt = new Date().toISOString();
+    }
+    room.updatedAt = new Date().toISOString();
+  }
+  return changed;
+}
+
+/** Auto-deal the next hand a few seconds after a showdown (if enabled). */
+function tickAutoAdvance(room: Room): boolean {
+  if (!room.config.autoNextHand) return false;
+  const st = room.gameState;
+  if (!st || st.handInProgress || !room.handEndedAt) return false;
+  if (Date.now() - new Date(room.handEndedAt).getTime() < 6000) return false;
+  if (st.seats.filter((s) => s.stack > 0).length < 2) return false;
+  dealNext(room);
+  return true;
+}
+
+/** Load a room and apply any due timeouts / auto-advance, persisting changes. */
+export async function tickAndGet(id: string): Promise<Room | undefined> {
+  const room = await getRoom(id);
+  if (!room) return undefined;
+  let changed = tickTimeouts(room);
+  // Mark a freshly-ended hand even if no timeout fired.
+  const st = room.gameState;
+  if (st && !st.handInProgress && !room.handEndedAt) {
+    room.handEndedAt = new Date().toISOString();
+    room.actingSince = undefined;
+    changed = true;
+  }
+  if (tickAutoAdvance(room)) changed = true;
+  if (changed) {
+    room.updatedAt = new Date().toISOString();
+    await persist(room);
+  }
+  return room;
 }
 
 /** Merge newly-joined room players into an existing engine state. */
@@ -179,6 +265,7 @@ function applyRoomAction(room: Room, playerId: string, action: Action): TableSta
   if (!room.gameState) throw new Error('아직 핸드가 시작되지 않았습니다.');
   const next = applyAction(room.gameState, playerId, action);
   room.gameState = next;
+  syncTimers(room);
   room.updatedAt = new Date().toISOString();
   return next;
 }
@@ -187,11 +274,17 @@ function applyRoomAction(room: Room, playerId: string, action: Action): TableSta
 export function toView(room: Room, viewerId?: string): RoomView {
   const view: RoomView = { ...room, you: viewerId };
   view.clock = computeClock(room);
+  view.serverNow = Date.now();
+  const timeout = room.config.actionTimeoutSec ?? 0;
   if (room.gameState) {
     view.gameState = redactFor(room.gameState, viewerId);
     // Only expose legal actions to the player whose turn it is.
     const toAct = room.gameState.seats[room.gameState.toAct];
     view.legal = toAct && viewerId && toAct.id === viewerId ? legalActions(room.gameState) : null;
+    view.deadline =
+      timeout > 0 && room.actingSince && room.gameState.handInProgress && room.gameState.toAct >= 0
+        ? new Date(room.actingSince).getTime() + timeout * 1000
+        : null;
   }
   return view;
 }

@@ -151,6 +151,14 @@ export function Table({
       ) : (
         <>
           <Felt state={state} youId={youId} potTotal={potTotal} />
+          {state.handInProgress && room.deadline && room.serverNow && room.config.actionTimeoutSec ? (
+            <TurnTimer
+              deadline={room.deadline}
+              serverNow={room.serverNow}
+              total={room.config.actionTimeoutSec}
+              who={state.toAct >= 0 ? state.seats[state.toAct]?.name ?? '' : ''}
+            />
+          ) : null}
           {!spectating && (
             <ActionBar
               state={state}
@@ -172,6 +180,51 @@ export function Table({
           <HandLog log={state.log} />
         </>
       )}
+    </div>
+  );
+}
+
+function TurnTimer({
+  deadline,
+  serverNow,
+  total,
+  who,
+}: {
+  deadline: number;
+  serverNow: number;
+  total: number;
+  who: string;
+}) {
+  const offset = useRef(serverNow - Date.now());
+  const [now, setNow] = useState(Date.now() + offset.current);
+  useEffect(() => {
+    offset.current = serverNow - Date.now();
+  }, [serverNow]);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now() + offset.current), 250);
+    return () => clearInterval(t);
+  }, []);
+  const remainingMs = Math.max(0, deadline - now);
+  const sec = Math.ceil(remainingMs / 1000);
+  const pct = Math.max(0, Math.min(100, (remainingMs / (total * 1000)) * 100));
+  const low = sec <= 8;
+  return (
+    <div className="card" style={{ padding: '10px 14px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+        <span className="muted">{who ? `${who} 차례` : '액션 대기'}</span>
+        <strong style={{ color: low ? 'var(--danger)' : 'var(--text)', fontVariantNumeric: 'tabular-nums' }}>
+          {sec}초
+        </strong>
+      </div>
+      <div className="bar" style={{ height: 6 }}>
+        <span
+          style={{
+            width: `${pct}%`,
+            background: low ? 'var(--danger)' : 'var(--accent)',
+            transition: 'width 0.25s linear',
+          }}
+        />
+      </div>
     </div>
   );
 }

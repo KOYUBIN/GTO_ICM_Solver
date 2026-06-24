@@ -26,6 +26,10 @@ export interface RoomConfig {
   levelMinutes: number;
   /** Blind-level ladder (tournament); a single level means fixed blinds. */
   levels?: BlindLevel[];
+  /** Seconds a player has to act before being auto-checked/folded (0 = off). */
+  actionTimeoutSec?: number;
+  /** Auto-deal the next hand a few seconds after showdown. */
+  autoNextHand?: boolean;
 }
 
 export interface Room {
@@ -38,6 +42,10 @@ export interface Room {
   gameState: TableState | null;
   /** ISO time the first hand was dealt — drives the blind clock. */
   startedAt?: string;
+  /** ISO time the current player's turn began — drives the action timer. */
+  actingSince?: string;
+  /** ISO time the last hand ended — drives auto-advance to the next hand. */
+  handEndedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -63,6 +71,10 @@ export interface RoomView extends Room {
   legal?: LegalActions | null;
   /** Live blind-level clock (tournaments only). */
   clock?: TournamentClock | null;
+  /** Epoch ms when the current actor times out (null when no timer running). */
+  deadline?: number | null;
+  /** Server clock (epoch ms) so the client can render a skew-free countdown. */
+  serverNow?: number;
 }
 
 // ----- client fetch helpers -----
