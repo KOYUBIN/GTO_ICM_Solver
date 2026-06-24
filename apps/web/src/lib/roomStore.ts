@@ -24,6 +24,7 @@ import {
   createGame,
   startHand,
   applyAction,
+  forfeit,
   redactFor,
   legalActions,
   getPreset,
@@ -145,6 +146,14 @@ function dealNext(room: Room): TableState {
     // Sync any players who joined since the table was created (seat them with a
     // starting stack), then deal the next hand keeping existing stacks.
     state = syncSeats(state, room);
+  }
+  // Remove players who left the table (skip them on the deal, chips cashed out).
+  if (room.left?.length) {
+    const left = new Set(room.left);
+    state = {
+      ...state,
+      seats: state.seats.map((s) => (left.has(s.id) ? { ...s, status: 'empty' as const, stack: 0 } : s)),
+    };
   }
   // Apply the current tournament blind level (no-op for cash / single level).
   const lvls = room.config.levels ?? [];
@@ -285,6 +294,18 @@ export function toView(room: Room, viewerId?: string): RoomView {
       timeout > 0 && room.actingSince && room.gameState.handInProgress && room.gameState.toAct >= 0
         ? new Date(room.actingSince).getTime() + timeout * 1000
         : null;
+
+    // Game over: between hands, at most one remaining player still has chips.
+    if (!room.gameState.handInProgress && room.gameState.handNumber > 0) {
+      const inPlay = room.players.filter((p) => {
+        const seat = room.gameState!.seats.find((s) => s.id === p.id);
+        return !seat || seat.stack > 0; // unseated joiners count as in
+      });
+      if (inPlay.length <= 1) {
+        view.gameOver = true;
+        view.overallWinner = inPlay[0]?.name;
+      }
+    }
   }
   return view;
 }
@@ -410,6 +431,34 @@ export async function startNextHand(id: string, playerId: string): Promise<Room>
   if (room.hostId !== playerId) throw new Error('호스트만 딜할 수 있습니다.');
   if (room.players.length < 2) throw new Error('플레이어가 2명 이상이어야 합니다.');
   dealNext(room);
+  await persist(room);
+  return room;
+}
+
+export async function leaveRoom(id: string, playerId: string): Promise<Room | undefined> {
+  const code = id.toUpperCase();
+  const room = await getRoom(code);
+  if (!room) return undefined;
+  room.players = room.players.filter((p) => p.id !== playerId);
+  room.left = room.left ?? [];
+  if (!room.left.includes(playerId)) room.left.push(playerId);
+  // Fold them out of the live hand (no-op if they're not seated / not active).
+  if (room.gameState) {
+    room.gameState = forfeit(room.gameState, playerId);
+    syncTimers(room);
+    // Between hands, hide their seat immediately (chips cashed out).
+    if (!room.gameState.handInProgress) {
+      room.gameState = {
+        ...room.gameState,
+        seats: room.gameState.seats.map((s) =>
+          s.id === playerId ? { ...s, status: 'empty' as const, stack: 0 } : s,
+        ),
+      };
+    }
+  }
+  // Hand the host role to whoever remains.
+  if (room.hostId === playerId && room.players.length) room.hostId = room.players[0].id;
+  room.updatedAt = new Date().toISOString();
   await persist(room);
   return room;
 }

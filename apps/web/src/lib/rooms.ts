@@ -46,6 +46,8 @@ export interface Room {
   actingSince?: string;
   /** ISO time the last hand ended — drives auto-advance to the next hand. */
   handEndedAt?: string;
+  /** Ids of players who left; skipped on future deals. */
+  left?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -75,6 +77,10 @@ export interface RoomView extends Room {
   deadline?: number | null;
   /** Server clock (epoch ms) so the client can render a skew-free countdown. */
   serverNow?: number;
+  /** True when only one player has chips left (tournament finished). */
+  gameOver?: boolean;
+  /** Name of the overall winner when gameOver. */
+  overallWinner?: string;
 }
 
 // ----- client fetch helpers -----
@@ -121,6 +127,14 @@ export async function startHandReq(id: string, playerId: string): Promise<RoomVi
   });
   if (!res.ok) throw new Error((await safeErr(res)) || '딜 실패');
   return res.json();
+}
+
+export async function leaveRoom(id: string, playerId: string): Promise<void> {
+  await fetch(`/api/rooms/${encodeURIComponent(id)}/leave`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ playerId }),
+  }).catch(() => {});
 }
 
 export async function sendAction(

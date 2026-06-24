@@ -7,6 +7,7 @@ import {
   fetchRoom,
   startHandReq,
   sendAction,
+  leaveRoom as leaveRoomReq,
   type RoomView,
   type RoomConfig,
 } from '@/lib/rooms';
@@ -85,6 +86,7 @@ export default function PlayPage() {
   }
 
   function leave() {
+    if (roomId && playerId) leaveRoomReq(roomId, playerId); // tell the server (fire-and-forget)
     localStorage.removeItem(LS_ROOM);
     localStorage.removeItem(LS_PLAYER);
     setRoomId(null);
