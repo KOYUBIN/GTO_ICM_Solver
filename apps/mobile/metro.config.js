@@ -15,4 +15,17 @@ config.resolver.nodeModulesPaths = [
   path.resolve(workspaceRoot, 'node_modules'),
 ];
 
+// The engine's "exports" map points bundlers at TS source (for Next.js), but
+// Metro can't resolve its NodeNext ".js" specifiers to ".ts". Force Metro to
+// load the built ./dist JS for @gto/engine instead (its internal ./*.js
+// specifiers then resolve within dist). Run `npm run build:engine` first.
+const ENGINE_DIST = path.resolve(workspaceRoot, 'packages/engine/dist');
+const defaultResolveRequest = config.resolver.resolveRequest;
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (moduleName === '@gto/engine') {
+    return { type: 'sourceFile', filePath: path.join(ENGINE_DIST, 'index.js') };
+  }
+  return (defaultResolveRequest ?? context.resolveRequest)(context, moduleName, platform);
+};
+
 module.exports = config;
