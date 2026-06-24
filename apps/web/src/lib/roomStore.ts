@@ -73,6 +73,7 @@ function newRoom(name: string, hostName: string, config: RoomConfig): { room: Ro
       levels: resolveLevels(config),
       actionTimeoutSec: config.actionTimeoutSec ?? 30,
       autoNextHand: config.autoNextHand ?? true,
+      allowRebuy: config.allowRebuy ?? true,
     },
     gameState: null,
     createdAt: now,
@@ -295,15 +296,18 @@ export function toView(room: Room, viewerId?: string): RoomView {
         ? new Date(room.actingSince).getTime() + timeout * 1000
         : null;
 
-    // Game over: between hands, at most one remaining player still has chips.
+    // Game over (between hands): either everyone left but one, or — in a
+    // no-rebuy tournament — only one player still has chips.
     if (!room.gameState.handInProgress && room.gameState.handNumber > 0) {
-      const inPlay = room.players.filter((p) => {
+      const withChips = room.players.filter((p) => {
         const seat = room.gameState!.seats.find((s) => s.id === p.id);
         return !seat || seat.stack > 0; // unseated joiners count as in
       });
-      if (inPlay.length <= 1) {
+      const overByLeave = room.players.length <= 1;
+      const overByBust = !room.config.allowRebuy && withChips.length <= 1;
+      if (overByLeave || overByBust) {
         view.gameOver = true;
-        view.overallWinner = inPlay[0]?.name;
+        view.overallWinner = (withChips[0] ?? room.players[0])?.name;
       }
     }
   }
@@ -431,6 +435,32 @@ export async function startNextHand(id: string, playerId: string): Promise<Room>
   if (room.hostId !== playerId) throw new Error('호스트만 딜할 수 있습니다.');
   if (room.players.length < 2) throw new Error('플레이어가 2명 이상이어야 합니다.');
   dealNext(room);
+  await persist(room);
+  return room;
+}
+
+/** A busted player buys back to the starting stack (if rebuys are allowed). */
+export async function rebuyPlayer(id: string, playerId: string): Promise<Room | undefined> {
+  const code = id.toUpperCase();
+  const room = await getRoom(code);
+  if (!room) return undefined;
+  if (!room.config.allowRebuy) throw new Error('이 테이블은 리바이를 허용하지 않습니다.');
+  if (!room.players.some((p) => p.id === playerId)) throw new Error('테이블에 없는 플레이어입니다.');
+  if (!room.gameState) throw new Error('아직 게임이 시작되지 않았습니다.');
+  const seat = room.gameState.seats.find((s) => s.id === playerId);
+  if (!seat) throw new Error('좌석을 찾을 수 없습니다.');
+  if (seat.stack > 0) throw new Error('아직 칩이 남아 있어 리바이할 수 없습니다.');
+
+  const live = room.gameState.handInProgress;
+  room.gameState = {
+    ...room.gameState,
+    seats: room.gameState.seats.map((s) =>
+      s.id === playerId
+        ? { ...s, stack: room.config.startingStack, status: live ? ('folded' as const) : ('active' as const) }
+        : s,
+    ),
+  };
+  room.updatedAt = new Date().toISOString();
   await persist(room);
   return room;
 }

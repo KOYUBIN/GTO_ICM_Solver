@@ -90,16 +90,20 @@ export function Table({
   onAction,
   onDeal,
   onLeave,
+  onRebuy,
 }: {
   room: RoomView;
   youId: string | null; // null = spectator
   onAction: (a: Action) => void;
   onDeal: () => void;
   onLeave: () => void;
+  onRebuy: () => void;
 }) {
   const state = room.gameState;
   const isHost = !!youId && room.hostId === youId;
   const spectating = !youId;
+  const mySeat = youId && state ? state.seats.find((s) => s.id === youId) : undefined;
+  const canRebuy = !!room.config.allowRebuy && !!mySeat && mySeat.stack === 0 && mySeat.status !== 'empty';
 
   const [soundOn, setSoundOn] = useState(false);
   useEffect(() => {
@@ -151,6 +155,17 @@ export function Table({
       ) : (
         <>
           <Felt state={state} youId={youId} potTotal={potTotal} />
+          {canRebuy && (
+            <div
+              className="card"
+              style={{ border: '2px solid var(--warn)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}
+            >
+              <span className="muted">칩이 떨어졌습니다. 리바이로 다음 핸드부터 다시 참가하세요.</span>
+              <button onClick={onRebuy} style={{ background: 'var(--warn)' }}>
+                리바이 +{room.config.startingStack.toLocaleString()}
+              </button>
+            </div>
+          )}
           {room.gameOver ? (
             <div className="card" style={{ textAlign: 'center', border: '2px solid var(--warn)' }}>
               <h2 style={{ margin: '4px 0' }}>🏆 게임 종료</h2>
