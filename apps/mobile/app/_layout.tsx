@@ -19,6 +19,7 @@ export default function Layout() {
         <Tabs.Screen name="index" options={{ title: '에쿼티', tabBarLabel: '에쿼티' }} />
         <Tabs.Screen name="ranges" options={{ title: '레인지', tabBarLabel: '레인지' }} />
         <Tabs.Screen name="icm" options={{ title: 'ICM', tabBarLabel: 'ICM' }} />
+        <Tabs.Screen name="play" options={{ title: '홀덤', tabBarLabel: '홀덤' }} />
         <Tabs.Screen name="community" options={{ title: '커뮤니티', tabBarLabel: '커뮤니티' }} />
       </Tabs>
     </>
