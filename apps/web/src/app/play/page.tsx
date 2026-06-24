@@ -172,10 +172,30 @@ function Landing({
     autoNextHand: true,
     allowRebuy: true,
   });
+  // Optional extra blind levels (level 1 is the sb/bb/ante above).
+  const [extraLevels, setExtraLevels] = useState<{ smallBlind: number; bigBlind: number; ante: number }[]>([]);
   const [joinCode, setJoinCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const nameRef = useRef<HTMLInputElement>(null);
+
+  function addLevel() {
+    const last = extraLevels[extraLevels.length - 1] ?? {
+      smallBlind: custom.smallBlind,
+      bigBlind: custom.bigBlind,
+      ante: custom.ante,
+    };
+    setExtraLevels([
+      ...extraLevels,
+      { smallBlind: last.bigBlind, bigBlind: last.bigBlind * 2, ante: last.ante },
+    ]);
+  }
+  function updateLevel(i: number, key: 'smallBlind' | 'bigBlind' | 'ante', v: number) {
+    setExtraLevels(extraLevels.map((l, idx) => (idx === i ? { ...l, [key]: v } : l)));
+  }
+  function removeLevel(i: number) {
+    setExtraLevels(extraLevels.filter((_, idx) => idx !== i));
+  }
 
   useEffect(() => {
     setName(localStorage.getItem(LS_NAME) ?? '');
@@ -183,6 +203,13 @@ function Landing({
 
   function buildConfig(): RoomConfig {
     if (showCustom) {
+      const levels =
+        extraLevels.length > 0
+          ? [
+              { level: 1, smallBlind: custom.smallBlind, bigBlind: custom.bigBlind, ante: custom.ante },
+              ...extraLevels.map((l, i) => ({ level: i + 2, ...l })),
+            ]
+          : undefined;
       return {
         presetId: 'custom',
         presetName: '커스텀',
@@ -194,6 +221,7 @@ function Landing({
         actionTimeoutSec: custom.actionTimeoutSec,
         autoNextHand: custom.autoNextHand,
         allowRebuy: custom.allowRebuy,
+        levels,
       };
     }
     return presetToConfig(getPreset(presetId));
@@ -396,6 +424,54 @@ function Landing({
                 />
                 리바이 허용 (버스트 시 재구매)
               </label>
+            </div>
+
+            <div style={{ marginTop: 16 }}>
+              <label>블라인드 래더 (선택 — 토너먼트 자동 상승)</label>
+              <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+                레벨 1은 위 SB/BB/앤티입니다. 레벨을 추가하면 {custom.levelMinutes || '?'}분마다 자동
+                상승합니다.
+                {custom.levelMinutes === 0 && extraLevels.length > 0 && (
+                  <span style={{ color: 'var(--warn)' }}> · 레벨 시간이 0이면 상승하지 않습니다</span>
+                )}
+              </div>
+              <div className="muted" style={{ marginBottom: 6 }}>
+                Lv.1 — {custom.smallBlind}/{custom.bigBlind}
+                {custom.ante ? ` (A${custom.ante})` : ''}
+              </div>
+              {extraLevels.map((l, i) => (
+                <div key={i} className="row" style={{ marginTop: 6, alignItems: 'center' }}>
+                  <span style={{ flex: '0 0 46px', fontWeight: 600 }}>Lv.{i + 2}</span>
+                  <input
+                    type="number"
+                    value={l.smallBlind}
+                    onChange={(e) => updateLevel(i, 'smallBlind', +e.target.value)}
+                    placeholder="SB"
+                  />
+                  <input
+                    type="number"
+                    value={l.bigBlind}
+                    onChange={(e) => updateLevel(i, 'bigBlind', +e.target.value)}
+                    placeholder="BB"
+                  />
+                  <input
+                    type="number"
+                    value={l.ante}
+                    onChange={(e) => updateLevel(i, 'ante', +e.target.value)}
+                    placeholder="앤티"
+                  />
+                  <button
+                    className="secondary"
+                    onClick={() => removeLevel(i)}
+                    style={{ flex: '0 0 auto', padding: '6px 10px' }}
+                  >
+                    삭제
+                  </button>
+                </div>
+              ))}
+              <button className="secondary" style={{ marginTop: 8 }} onClick={addLevel}>
+                + 레벨 추가
+              </button>
             </div>
           </div>
         )}

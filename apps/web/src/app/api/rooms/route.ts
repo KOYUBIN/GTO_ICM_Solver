@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
     actionTimeoutSec: Math.min(120, num(c.actionTimeoutSec, 30)),
     autoNextHand: c.autoNextHand !== false,
     allowRebuy: c.allowRebuy !== false,
-    levels: Array.isArray(c.levels) ? c.levels : undefined,
+    levels: sanitizeLevels(c.levels),
   };
   if (config.bigBlind <= 0 || config.startingStack < config.bigBlind) {
     return NextResponse.json({ error: '블라인드/스택 설정이 올바르지 않습니다.' }, { status: 400 });
@@ -45,4 +45,16 @@ export async function POST(req: NextRequest) {
 function num(v: unknown, fallback: number): number {
   const n = Number(v);
   return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+// Validate a client-supplied blind ladder; drop it unless every level is sane.
+function sanitizeLevels(v: unknown): RoomConfig['levels'] {
+  if (!Array.isArray(v) || v.length === 0) return undefined;
+  const out = v.map((lv, i) => {
+    const o = (lv ?? {}) as Record<string, unknown>;
+    const bb = num(o.bigBlind, 0);
+    return { level: i + 1, smallBlind: num(o.smallBlind, 0), bigBlind: bb, ante: num(o.ante, 0) };
+  });
+  if (out.some((l) => l.bigBlind <= 0)) return undefined;
+  return out;
 }
