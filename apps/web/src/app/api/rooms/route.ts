@@ -25,6 +25,9 @@ export async function POST(req: NextRequest) {
     bigBlind: bb,
     ante: num(c.ante, 0),
     levelMinutes: num(c.levelMinutes, 0),
+    actionTimeoutSec: Math.min(120, num(c.actionTimeoutSec, 30)),
+    autoNextHand: c.autoNextHand !== false,
+    levels: Array.isArray(c.levels) ? c.levels : undefined,
   };
   if (config.bigBlind <= 0 || config.startingStack < config.bigBlind) {
     return NextResponse.json({ error: '블라인드/스택 설정이 올바르지 않습니다.' }, { status: 400 });

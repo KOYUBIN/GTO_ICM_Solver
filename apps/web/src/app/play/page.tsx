@@ -28,6 +28,8 @@ function presetToConfig(p: BlindPreset): RoomConfig {
     bigBlind: lv.bigBlind,
     ante: lv.ante,
     levelMinutes: p.levelMinutes,
+    actionTimeoutSec: 30,
+    autoNextHand: true,
   };
 }
 
@@ -145,6 +147,8 @@ function Landing({
     bigBlind: 20,
     ante: 0,
     levelMinutes: 0,
+    actionTimeoutSec: 30,
+    autoNextHand: true,
   });
   const [joinCode, setJoinCode] = useState('');
   const [busy, setBusy] = useState(false);
@@ -165,6 +169,8 @@ function Landing({
         bigBlind: custom.bigBlind,
         ante: custom.ante,
         levelMinutes: custom.levelMinutes,
+        actionTimeoutSec: custom.actionTimeoutSec,
+        autoNextHand: custom.autoNextHand,
       };
     }
     return presetToConfig(getPreset(presetId));
@@ -334,6 +340,27 @@ function Landing({
                   value={custom.levelMinutes}
                   onChange={(e) => setCustom({ ...custom, levelMinutes: +e.target.value })}
                 />
+              </div>
+            </div>
+            <div className="row" style={{ marginTop: 12 }}>
+              <div>
+                <label>액션 제한시간(초, 0=무제한)</label>
+                <input
+                  type="number"
+                  value={custom.actionTimeoutSec}
+                  onChange={(e) => setCustom({ ...custom, actionTimeoutSec: +e.target.value })}
+                />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={custom.autoNextHand}
+                    onChange={(e) => setCustom({ ...custom, autoNextHand: e.target.checked })}
+                    style={{ width: 'auto' }}
+                  />
+                  자동 다음 핸드
+                </label>
               </div>
             </div>
           </div>
