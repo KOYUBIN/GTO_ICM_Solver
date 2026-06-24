@@ -8,6 +8,7 @@ import {
   startHandReq,
   sendAction,
   leaveRoom as leaveRoomReq,
+  rebuy as rebuyReq,
   type RoomView,
   type RoomConfig,
 } from '@/lib/rooms';
@@ -31,6 +32,7 @@ function presetToConfig(p: BlindPreset): RoomConfig {
     levelMinutes: p.levelMinutes,
     actionTimeoutSec: 30,
     autoNextHand: true,
+    allowRebuy: p.isCash, // cash: rebuy on; tournaments: off (play to a winner)
   };
 }
 
@@ -114,12 +116,29 @@ export default function PlayPage() {
     }
   }
 
+  async function onRebuy() {
+    if (!roomId || !playerId) return;
+    try {
+      const v = await rebuyReq(roomId, playerId);
+      setRoom(v);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   if (roomId) {
     return (
       <div className="container">
         {error && <p style={{ color: 'var(--danger)' }}>{error}</p>}
         {room ? (
-          <Table room={room} youId={playerId} onAction={onAction} onDeal={onDeal} onLeave={leave} />
+          <Table
+            room={room}
+            youId={playerId}
+            onAction={onAction}
+            onDeal={onDeal}
+            onLeave={leave}
+            onRebuy={onRebuy}
+          />
         ) : (
           <p className="muted">방 불러오는 중…</p>
         )}
@@ -151,6 +170,7 @@ function Landing({
     levelMinutes: 0,
     actionTimeoutSec: 30,
     autoNextHand: true,
+    allowRebuy: true,
   });
   const [joinCode, setJoinCode] = useState('');
   const [busy, setBusy] = useState(false);
@@ -173,6 +193,7 @@ function Landing({
         levelMinutes: custom.levelMinutes,
         actionTimeoutSec: custom.actionTimeoutSec,
         autoNextHand: custom.autoNextHand,
+        allowRebuy: custom.allowRebuy,
       };
     }
     return presetToConfig(getPreset(presetId));
@@ -364,6 +385,17 @@ function Landing({
                   자동 다음 핸드
                 </label>
               </div>
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={custom.allowRebuy}
+                  onChange={(e) => setCustom({ ...custom, allowRebuy: e.target.checked })}
+                  style={{ width: 'auto' }}
+                />
+                리바이 허용 (버스트 시 재구매)
+              </label>
             </div>
           </div>
         )}

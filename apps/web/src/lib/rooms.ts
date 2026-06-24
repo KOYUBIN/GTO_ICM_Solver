@@ -30,6 +30,8 @@ export interface RoomConfig {
   actionTimeoutSec?: number;
   /** Auto-deal the next hand a few seconds after showdown. */
   autoNextHand?: boolean;
+  /** Allow busted players to rebuy back to the starting stack (cash-style). */
+  allowRebuy?: boolean;
 }
 
 export interface Room {
@@ -135,6 +137,16 @@ export async function leaveRoom(id: string, playerId: string): Promise<void> {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ playerId }),
   }).catch(() => {});
+}
+
+export async function rebuy(id: string, playerId: string): Promise<RoomView> {
+  const res = await fetch(`/api/rooms/${encodeURIComponent(id)}/rebuy`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ playerId }),
+  });
+  if (!res.ok) throw new Error((await safeErr(res)) || '리바이 실패');
+  return res.json();
 }
 
 export async function sendAction(

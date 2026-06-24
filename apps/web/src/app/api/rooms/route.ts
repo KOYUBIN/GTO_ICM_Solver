@@ -27,6 +27,7 @@ export async function POST(req: NextRequest) {
     levelMinutes: num(c.levelMinutes, 0),
     actionTimeoutSec: Math.min(120, num(c.actionTimeoutSec, 30)),
     autoNextHand: c.autoNextHand !== false,
+    allowRebuy: c.allowRebuy !== false,
     levels: Array.isArray(c.levels) ? c.levels : undefined,
   };
   if (config.bigBlind <= 0 || config.startingStack < config.bigBlind) {
