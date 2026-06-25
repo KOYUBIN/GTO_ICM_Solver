@@ -153,3 +153,13 @@ test('ocr: handles unicode suit glyphs and 10 -> T', () => {
   assert.ok(r.cards.includes('Th'));
   assert.equal(r.pot, 12000);
 });
+
+test('solvePostflop: fully-conflicting ranges throw instead of hanging', () => {
+  // Both ranges share the Ace of clubs, so no non-conflicting pair exists.
+  const oop: Combo[] = [parseCards('AcAd') as Combo];
+  const ip: Combo[] = [parseCards('AcAh') as Combo];
+  assert.throws(
+    () => solvePostflop({ board: 'Ks7h2c', oopRange: oop, ipRange: ip, pot: 60, iterations: 100 }),
+    /충돌하지 않는/,
+  );
+});

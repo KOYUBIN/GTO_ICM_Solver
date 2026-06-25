@@ -56,10 +56,12 @@ export function HandResult({ state, youId }: { state: TableState; youId: string 
   const eqRows = useMemo(() => {
     if (contenders.length < 2) return null;
     try {
+      // Runs synchronously during render, so keep it cheap — this is an
+      // at-a-glance overview (the river row is exact regardless of iterations).
       return streetEquities(
         contenders.map((s) => cardsToString(s.holeCards)),
         boardStr,
-        { iterations: 15000, seed: handNo + 1 },
+        { iterations: 2000, seed: handNo + 1 },
       );
     } catch {
       return null;

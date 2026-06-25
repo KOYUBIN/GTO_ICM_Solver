@@ -100,7 +100,10 @@ export default function AnalyzePage() {
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    setImageUrl(URL.createObjectURL(file));
+    setImageUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev); // free the previous object URL
+      return URL.createObjectURL(file);
+    });
     setOcr(null);
     setOcrError('');
     setOcrBusy(true);

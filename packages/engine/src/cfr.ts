@@ -198,13 +198,14 @@ export function solveRiver(config: RiverSolveConfig): RiverSolveResult {
 
   // Sample a non-conflicting (oop, ip) hand pair.
   function sampleHands(): [number, number] {
-    for (;;) {
+    for (let iter = 0; iter < 10000; iter++) {
       const i = (rnd() * oop.length) | 0;
       const j = (rnd() * ip.length) | 0;
       const a = oop[i];
       const b = ip[j];
       if (a[0] !== b[0] && a[0] !== b[1] && a[1] !== b[0] && a[1] !== b[1]) return [i, j];
     }
+    throw new Error('서로 충돌하지 않는 핸드 조합을 찾을 수 없습니다. 레인지를 확인해주세요.');
   }
 
   for (let it = 0; it < iterations; it++) {
@@ -403,11 +404,12 @@ export function solvePostflop(config: PostflopSolveConfig): PostflopSolveResult 
   }
 
   function sampleHands(): [Combo, Combo] {
-    for (;;) {
+    for (let iter = 0; iter < 10000; iter++) {
       const a = oop[(rnd() * oop.length) | 0];
       const b = ip[(rnd() * ip.length) | 0];
       if (a[0] !== b[0] && a[0] !== b[1] && a[1] !== b[0] && a[1] !== b[1]) return [a, b];
     }
+    throw new Error('서로 충돌하지 않는 핸드 조합을 찾을 수 없습니다. 레인지를 확인해주세요.');
   }
 
   for (let it = 0; it < iterations; it++) {
@@ -446,7 +448,7 @@ export function solvePostflop(config: PostflopSolveConfig): PostflopSolveResult 
     }
     if (a === 0) {
       const total = deadPot + c0 + c1;
-      return (player === 0 ? 1 : 0) === 0 ? total - c0 : -c0; // OOP net on a fold
+      return player === 1 ? total - c0 : -c0; // OOP net on a fold
     }
     return player === 0 ? closeEV(board, c1, c1, hist + 'c', h0, h1) : closeEV(board, c0, c0, hist + 'c', h0, h1);
   }
