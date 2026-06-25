@@ -7,6 +7,7 @@ import { exactEquity } from './enumerate.js';
 import { calcEquity } from './equity.js';
 import { parseRange, rangeToCombos, type Combo } from './range.js';
 import { parseCards } from './cards.js';
+import { parseOcrPoker } from './ocr.js';
 
 test('charts: BTN RFI is wider than UTG RFI', () => {
   const utg = getChart({ gameType: 'cash', stackBB: 100, heroPos: 'UTG', line: 'RFI' });
@@ -125,4 +126,30 @@ test('solvePostflop: multi-street flop solve runs; nuts bet more than air', () =
   const setBet = sets.reduce((s, x) => s + x.bet, 0) / sets.length;
   const airBet = air.reduce((s, x) => s + x.bet, 0) / air.length;
   assert.ok(setBet > airBet, `set ${setBet} should bet more than air ${airBet}`);
+});
+
+test('ocr: parses cards, pot and ranks from screenshot-like text', () => {
+  const text = [
+    '클래식 200억 GTD',
+    'ubin BTN  Ks Kc',
+    'Forgiven BB  8h 8d',
+    'Board: 8s 7c 2d  Qh  3s',
+    'POT 599,114',
+  ].join('\n');
+  const r = parseOcrPoker(text);
+  // Full card tokens (rank+suit) are normalized.
+  assert.ok(r.cards.includes('Ks') && r.cards.includes('Kc'));
+  assert.ok(r.cards.includes('8h') && r.cards.includes('8d'));
+  assert.ok(r.cards.includes('8s') && r.cards.includes('7c') && r.cards.includes('Qh'));
+  // Pot prefers the line tagged with POT.
+  assert.equal(r.pot, 599114);
+  // Title is the GTD line.
+  assert.ok(r.title && r.title.includes('GTD'));
+});
+
+test('ocr: handles unicode suit glyphs and 10 -> T', () => {
+  const r = parseOcrPoker('A♠ 10♥  pot 12,000');
+  assert.ok(r.cards.includes('As'));
+  assert.ok(r.cards.includes('Th'));
+  assert.equal(r.pot, 12000);
 });
