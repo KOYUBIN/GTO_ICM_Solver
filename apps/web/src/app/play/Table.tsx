@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { cardToString, type TableState, type Action, type Seat } from '@gto/engine';
 import type { RoomView } from '@/lib/rooms';
 import { sfx, primeAudio } from './sounds';
+import { HandResult } from './HandResult';
 
 const SUIT_GLYPH: Record<string, string> = { c: '♣', d: '♦', h: '♥', s: '♠' };
 const RED = new Set(['h', 'd']);
@@ -155,6 +156,7 @@ export function Table({
       ) : (
         <>
           <Felt state={state} youId={youId} potTotal={potTotal} />
+          <HandResult state={state} youId={youId} />
           {canRebuy && (
             <div
               className="card"
