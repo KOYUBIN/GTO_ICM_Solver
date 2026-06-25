@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { getChart, availableRfiPositions, availableVsRfi } from './charts.js';
-import { solveRiver } from './cfr.js';
+import { solveRiver, solvePostflop } from './cfr.js';
 import { exactEquity } from './enumerate.js';
 import { calcEquity } from './equity.js';
 import { parseRange, rangeToCombos, type Combo } from './range.js';
@@ -95,4 +95,34 @@ test('cfr: within a polarized range, the nut hands value bet near 100%', () => {
   const nutRows = res.oopStrategy.filter((r) => setKeys.has(`${r.combo[0]}-${r.combo[1]}`));
   const avgNutBet = nutRows.reduce((s, r) => s + r.bet, 0) / nutRows.length;
   assert.ok(avgNutBet > 0.8, `nut hands should bet a lot, got ${avgNutBet}`);
+});
+
+test('solvePostflop: solves a river board (single street) sensibly', () => {
+  const board = 'KsQd7h2c3s';
+  const oop = [
+    ...rangeToCombos(parseRange('77')).map((x) => x.combo), // value
+    ...rangeToCombos(parseRange('65s')).map((x) => x.combo), // air
+  ];
+  const ip: Combo[] = [parseCards('KdJd') as Combo];
+  const r = solvePostflop({ board, oopRange: oop, ipRange: ip, pot: 100, betFraction: 0.75, iterations: 6000, seed: 3 });
+  assert.equal(r.street, 'river');
+  assert.ok(Number.isFinite(r.oopEV));
+  assert.ok(r.oopBetFreq >= 0 && r.oopBetFreq <= 1);
+});
+
+test('solvePostflop: multi-street flop solve runs; nuts bet more than air', () => {
+  // Flop input -> solver runs out turn + river via chance sampling.
+  const board = 'Ks7h2c';
+  const setCombos = rangeToCombos(parseRange('77')).map((x) => x.combo); // flopped set
+  const airCombos = rangeToCombos(parseRange('65s')).map((x) => x.combo); // air
+  const setKeys = new Set(setCombos.map((c) => `${c[0]}-${c[1]}`));
+  const oop = [...setCombos, ...airCombos];
+  const ip: Combo[] = [parseCards('AhKh') as Combo, parseCards('QsQc') as Combo];
+  const r = solvePostflop({ board, oopRange: oop, ipRange: ip, pot: 60, betFraction: 0.66, iterations: 9000, seed: 5 });
+  assert.equal(r.street, 'flop');
+  const sets = r.oopStrategy.filter((x) => setKeys.has(`${x.combo[0]}-${x.combo[1]}`));
+  const air = r.oopStrategy.filter((x) => !setKeys.has(`${x.combo[0]}-${x.combo[1]}`));
+  const setBet = sets.reduce((s, x) => s + x.bet, 0) / sets.length;
+  const airBet = air.reduce((s, x) => s + x.bet, 0) / air.length;
+  assert.ok(setBet > airBet, `set ${setBet} should bet more than air ${airBet}`);
 });
