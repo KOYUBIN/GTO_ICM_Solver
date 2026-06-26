@@ -177,7 +177,17 @@ function Landing({
   const [joinCode, setJoinCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // 'file' backend on a serverless deploy means rooms don't persist across
+  // instances, so other people can't join. Surface that up front.
+  const [roomBackend, setRoomBackend] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    fetch('/api/health')
+      .then((r) => r.json())
+      .then((d) => setRoomBackend(d.roomBackend ?? null))
+      .catch(() => {});
+  }, []);
 
   function addLevel() {
     const last = extraLevels[extraLevels.length - 1] ?? {
@@ -278,6 +288,18 @@ function Landing({
         방을 만들어 코드를 공유하면 친구들이 참가합니다. 칩·블라인드 프리셋을 고르거나 직접
         설정하세요.
       </p>
+
+      {roomBackend === 'file' && (
+        <div className="card" style={{ border: '2px solid var(--warn)', background: 'rgba(210,153,34,0.08)' }}>
+          <strong style={{ color: 'var(--warn)' }}>⚠️ 멀티플레이 저장소가 임시 모드입니다</strong>
+          <p className="muted" style={{ margin: '6px 0 0', fontSize: 13 }}>
+            이 배포는 데이터베이스가 연결돼 있지 않아 방이 서버 인스턴스마다 따로 저장됩니다. 그래서 다른
+            사람이 같은 코드로 들어와도 <strong>“방이 존재하지 않습니다”</strong>가 뜰 수 있습니다.
+            친구들과 함께 하려면 Vercel 대시보드에서 Postgres 데이터베이스(예: Neon)를 만들어 프로젝트에
+            연결한 뒤 재배포하세요. (연결되면 이 경고가 사라집니다.)
+          </p>
+        </div>
+      )}
 
       <div className="card">
         <label>닉네임</label>

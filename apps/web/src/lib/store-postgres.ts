@@ -6,7 +6,7 @@
  * schema. The schema is created and seeded once per process on first access.
  */
 
-import { sql } from '@vercel/postgres';
+import { pgPool } from './pg';
 import type { Comment, NewPost, Post, PostType, ArticleCategory } from './community';
 import { SEED } from './seed';
 
@@ -17,7 +17,7 @@ function ensure(): Promise<void> {
 }
 
 async function init(): Promise<void> {
-  await sql`CREATE TABLE IF NOT EXISTS posts (
+  await pgPool().sql`CREATE TABLE IF NOT EXISTS posts (
     id text PRIMARY KEY,
     type text NOT NULL,
     category text,
@@ -25,11 +25,11 @@ async function init(): Promise<void> {
     created_at timestamptz NOT NULL DEFAULT now(),
     data jsonb NOT NULL
   )`;
-  const { rows } = await sql`SELECT count(*)::int AS n FROM posts`;
+  const { rows } = await pgPool().sql`SELECT count(*)::int AS n FROM posts`;
   if (rows[0].n === 0) {
     for (const p of SEED) {
       const category = p.type === 'article' ? p.category : null;
-      await sql`INSERT INTO posts (id, type, category, votes, created_at, data)
+      await pgPool().sql`INSERT INTO posts (id, type, category, votes, created_at, data)
         VALUES (${p.id}, ${p.type}, ${category}, ${p.votes}, ${p.createdAt}, ${JSON.stringify(p)}::jsonb)
         ON CONFLICT (id) DO NOTHING`;
     }
@@ -43,18 +43,18 @@ export async function listPosts(filter?: {
   await ensure();
   const res =
     filter?.type && filter?.category
-      ? await sql`SELECT data FROM posts
+      ? await pgPool().sql`SELECT data FROM posts
           WHERE type = ${filter.type} AND category = ${filter.category}
           ORDER BY votes DESC`
       : filter?.type
-        ? await sql`SELECT data FROM posts WHERE type = ${filter.type} ORDER BY votes DESC`
-        : await sql`SELECT data FROM posts ORDER BY votes DESC`;
+        ? await pgPool().sql`SELECT data FROM posts WHERE type = ${filter.type} ORDER BY votes DESC`
+        : await pgPool().sql`SELECT data FROM posts ORDER BY votes DESC`;
   return res.rows.map((r) => r.data as Post);
 }
 
 export async function getPost(id: string): Promise<Post | undefined> {
   await ensure();
-  const { rows } = await sql`SELECT data FROM posts WHERE id = ${id}`;
+  const { rows } = await pgPool().sql`SELECT data FROM posts WHERE id = ${id}`;
   return rows[0]?.data as Post | undefined;
 }
 
@@ -68,7 +68,7 @@ export async function createPost(post: NewPost): Promise<Post> {
     comments: [],
   } as Post;
   const category = created.type === 'article' ? created.category : null;
-  await sql`INSERT INTO posts (id, type, category, votes, created_at, data)
+  await pgPool().sql`INSERT INTO posts (id, type, category, votes, created_at, data)
     VALUES (${created.id}, ${created.type}, ${category}, ${created.votes}, ${created.createdAt}, ${JSON.stringify(
       created,
     )}::jsonb)`;
@@ -81,7 +81,7 @@ export async function addComment(
   body: string,
 ): Promise<Comment | undefined> {
   await ensure();
-  const { rows } = await sql`SELECT data FROM posts WHERE id = ${postId}`;
+  const { rows } = await pgPool().sql`SELECT data FROM posts WHERE id = ${postId}`;
   if (!rows[0]) return undefined;
   const post = rows[0].data as Post;
   const comment: Comment = {
@@ -91,16 +91,16 @@ export async function addComment(
     createdAt: new Date().toISOString(),
   };
   post.comments.push(comment);
-  await sql`UPDATE posts SET data = ${JSON.stringify(post)}::jsonb WHERE id = ${postId}`;
+  await pgPool().sql`UPDATE posts SET data = ${JSON.stringify(post)}::jsonb WHERE id = ${postId}`;
   return comment;
 }
 
 export async function votePost(postId: string, delta: number): Promise<Post | undefined> {
   await ensure();
-  const { rows } = await sql`SELECT data FROM posts WHERE id = ${postId}`;
+  const { rows } = await pgPool().sql`SELECT data FROM posts WHERE id = ${postId}`;
   if (!rows[0]) return undefined;
   const post = rows[0].data as Post;
   post.votes += delta;
-  await sql`UPDATE posts SET votes = ${post.votes}, data = ${JSON.stringify(post)}::jsonb WHERE id = ${postId}`;
+  await pgPool().sql`UPDATE posts SET votes = ${post.votes}, data = ${JSON.stringify(post)}::jsonb WHERE id = ${postId}`;
   return post;
 }
