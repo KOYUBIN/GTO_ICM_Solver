@@ -11,8 +11,9 @@
 
 import * as fileStore from './store-file';
 import * as pgStore from './store-postgres';
+import { HAS_PG } from './pg';
 
-const backend = process.env.POSTGRES_URL ? pgStore : fileStore;
+const backend = HAS_PG ? pgStore : fileStore;
 
 export const listPosts = backend.listPosts;
 export const getPost = backend.getPost;
@@ -21,4 +22,4 @@ export const addComment = backend.addComment;
 export const votePost = backend.votePost;
 
 /** Which backend is active (for diagnostics / a health endpoint). */
-export const STORE_BACKEND = process.env.POSTGRES_URL ? 'postgres' : 'file';
+export const STORE_BACKEND = HAS_PG ? 'postgres' : 'file';

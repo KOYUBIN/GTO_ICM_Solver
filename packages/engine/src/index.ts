@@ -17,5 +17,6 @@ export * from './spotev.js';
 export * from './enumerate.js';
 export * from './history.js';
 export * from './replay.js';
+export * from './ocr.js';
 export * from './holdem.js';
 export * from './blinds.js';

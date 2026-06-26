@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { streetEquities, parseCards, type StreetEquity } from '@gto/engine';
 import { PlayingCards } from '@/components/Cards';
 
@@ -37,6 +37,42 @@ export default function ReplayPage() {
   const [result, setResult] = useState<{ rows: StreetEquity[]; players: Player[]; board: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [fromOcr, setFromOcr] = useState(false);
+
+  // Apply an OCR handoff from /analyze (best-effort: hole cards then board).
+  useEffect(() => {
+    let raw: string | null = null;
+    try {
+      raw = sessionStorage.getItem('replayPrefill');
+    } catch {
+      return;
+    }
+    if (!raw) return;
+    try {
+      sessionStorage.removeItem('replayPrefill');
+    } catch {
+      /* ignore */
+    }
+    try {
+      const p = JSON.parse(raw) as { title?: string; pot?: string; cards?: string[] };
+      if (p.title) setTitle(p.title);
+      if (p.pot) setPot(p.pot);
+      const cards = (p.cards ?? []).filter((c) => typeof c === 'string');
+      if (cards.length >= 4) {
+        // Guess: first two pairs are the two players' hole cards, rest is board.
+        setPlayers([
+          { name: 'P1', pos: 'BTN', cards: cards.slice(0, 2).join('') },
+          { name: 'P2', pos: 'BB', cards: cards.slice(2, 4).join('') },
+        ]);
+        const board = cards.slice(4, 9);
+        if (board.length >= 3) setBoard(board.join(' '));
+        else setBoard('');
+      }
+      setFromOcr(true);
+    } catch {
+      /* ignore malformed prefill */
+    }
+  }, []);
 
   function setPlayer(i: number, patch: Partial<Player>) {
     setPlayers(players.map((p, idx) => (idx === i ? { ...p, ...patch } : p)));
@@ -86,6 +122,19 @@ export default function ReplayPage() {
       <p className="subtitle">
         WPL식으로 올인 핸드를 입력하면 스트리트별 에쿼티(예: 88 vs KK = 19.5%)와 승자·결과를 보여줍니다.
       </p>
+
+      {fromOcr && (
+        <div
+          className="card"
+          style={{ borderColor: 'var(--accent)', background: 'rgba(88,166,255,0.06)', marginBottom: 14 }}
+        >
+          <strong>스크린샷에서 불러왔습니다 (베타)</strong>
+          <p className="muted" style={{ margin: '6px 0 0', fontSize: 13 }}>
+            카드 무늬는 OCR 인식이 불완전할 수 있고, 홀카드/보드 배치는 추정입니다. 아래 값을 확인·수정한 뒤
+            분석하세요.
+          </p>
+        </div>
+      )}
 
       <div className="card">
         <div className="row">
