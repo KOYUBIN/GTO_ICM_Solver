@@ -24,7 +24,7 @@ const FEATURES = [
   {
     href: '/solver',
     title: '포스트플랍 솔버 (MCCFR)',
-    desc: '몬테카를로 CFR로 리버 스팟을 풀어 체크/베팅 전략과 EV를 계산합니다.',
+    desc: '몬테카를로 CFR로 플랍·턴·리버를 풀어 체크/베팅 전략과 EV를 계산합니다. (멀티 스트리트 챈스 샘플링)',
   },
   {
     href: '/icm',
