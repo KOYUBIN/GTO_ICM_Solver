@@ -154,6 +154,17 @@ test('ocr: handles unicode suit glyphs and 10 -> T', () => {
   assert.equal(r.pot, 12000);
 });
 
+test('ocr: does not mis-read words like GTD/cash as cards, keeps joined cards', () => {
+  // "GTD" (Guaranteed) must not become Td; "cash" must not become As.
+  const r = parseOcrPoker('클래식 200억 GTD  cash game');
+  assert.ok(!r.cards.includes('Td'), `GTD leaked Td: ${r.cards.join(',')}`);
+  assert.ok(!r.cards.includes('As'), `cash leaked As: ${r.cards.join(',')}`);
+  // Joined hole cards (no space) still parse.
+  const r2 = parseOcrPoker('KsKc vs 8h8d');
+  assert.ok(r2.cards.includes('Ks') && r2.cards.includes('Kc'));
+  assert.ok(r2.cards.includes('8h') && r2.cards.includes('8d'));
+});
+
 test('solvePostflop: fully-conflicting ranges throw instead of hanging', () => {
   // Both ranges share the Ace of clubs, so no non-conflicting pair exists.
   const oop: Combo[] = [parseCards('AcAd') as Combo];

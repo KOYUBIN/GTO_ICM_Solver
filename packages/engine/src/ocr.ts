@@ -51,12 +51,21 @@ export function parseOcrPoker(raw: string): OcrPokerResult {
     .map((l) => l.trim())
     .filter(Boolean);
 
-  // Card tokens with a readable suit.
+  // Card tokens with a readable suit. To avoid reading rank+suit out of ordinary
+  // words ("GTD" → Td, "cash" → As), reject a token that starts inside an
+  // alphabetic word — UNLESS it begins exactly where the previous card ended, so
+  // joined hole cards like "KsKc" / "KsKcQd" still chain.
   const cards: string[] = [];
   const seen = new Set<string>();
   let m: RegExpExecArray | null;
+  let prevEnd = -1;
   CARD_RE.lastIndex = 0;
   while ((m = CARD_RE.exec(raw)) !== null) {
+    const start = m.index;
+    const before = start > 0 ? raw[start - 1] : '';
+    const okStart = start === 0 || !/[A-Za-z]/.test(before) || start === prevEnd;
+    if (!okStart) continue;
+    prevEnd = start + m[0].length;
     const rank = normRank(m[1]);
     const suit = SUIT_MAP[m[2].toLowerCase()] ?? SUIT_MAP[m[2]];
     if (!suit) continue;

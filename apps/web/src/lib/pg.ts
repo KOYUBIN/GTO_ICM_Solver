@@ -15,6 +15,11 @@ export const HAS_PG = !!PG_CONN;
 
 let _pool: VercelPool | null = null;
 export function pgPool(): VercelPool {
-  if (!_pool) _pool = createPool({ connectionString: PG_CONN });
+  if (!_pool) {
+    // When POSTGRES_URL is present, let @vercel/postgres read it itself — that's
+    // the proven path with its built-in pooled-endpoint handling. Only pass an
+    // explicit connection string for the DATABASE_URL fallback.
+    _pool = process.env.POSTGRES_URL ? createPool() : createPool({ connectionString: PG_CONN });
+  }
   return _pool;
 }
