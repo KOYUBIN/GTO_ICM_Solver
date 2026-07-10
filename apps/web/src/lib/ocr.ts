@@ -15,7 +15,10 @@ export interface OcrRun {
  */
 export async function ocrImage(file: File | Blob, onProgress?: (p: number) => void): Promise<OcrRun> {
   const { default: Tesseract } = await import('tesseract.js');
-  const { data } = await Tesseract.recognize(file, 'eng', {
+  // 'eng+kor' so Korean UI text (팟/총 팟 pot hints, tournament names) is read on
+  // the WPL/WinJoy screenshots this targets. The kor traineddata is fetched
+  // lazily from the same CDN on first use.
+  const { data } = await Tesseract.recognize(file, 'eng+kor', {
     logger: (msg: { status?: string; progress?: number }) => {
       if (msg.status === 'recognizing text' && typeof msg.progress === 'number') {
         onProgress?.(msg.progress);

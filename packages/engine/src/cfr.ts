@@ -131,6 +131,7 @@ export function solveRiver(config: RiverSolveConfig): RiverSolveResult {
   const board = parseCards(config.board);
   if (board.length !== 5) throw new Error('River solve needs exactly 5 board cards.');
   const boardSet = new Set(board);
+  if (boardSet.size !== board.length) throw new Error('Board contains duplicate cards.');
   const bet = config.pot * (config.betFraction ?? 0.75);
   const tree = buildTree(config.pot, bet);
   const iterations = config.iterations ?? 20000;
@@ -305,13 +306,24 @@ export interface PostflopSolveResult {
   ipCallVsBetFreq: number;
   oopEV: number;
   iterations: number;
+  /**
+   * True for flop/turn inputs: those solve future streets by chance-sampling, so
+   * with a modest iteration budget the strategy/EV are approximate (a few % of
+   * pot exploitable) and mildly seed-dependent. River solves are converged.
+   */
+  approximate: boolean;
 }
 
 export function solvePostflop(config: PostflopSolveConfig): PostflopSolveResult {
   const initBoard = parseCards(config.board);
   if (![3, 4, 5].includes(initBoard.length)) throw new Error('보드는 3, 4, 5장이어야 합니다.');
+  if (new Set(initBoard).size !== initBoard.length) throw new Error('보드에 중복된 카드가 있습니다.');
   const betFraction = config.betFraction ?? 0.66;
-  const iterations = config.iterations ?? 20000;
+  // Later streets multiply the infoset space (keyed per runout), so raise the
+  // default budget for turn/flop. Callers (e.g. the in-browser solver page) that
+  // need a snappier solve pass an explicit, smaller iteration count.
+  const iterations =
+    config.iterations ?? (initBoard.length === 5 ? 20000 : initBoard.length === 4 ? 80000 : 150000);
   const rnd = mulberry32(config.seed ?? 0x51b3);
   const deadPot = config.pot;
 
@@ -479,5 +491,6 @@ export function solvePostflop(config: PostflopSolveConfig): PostflopSolveResult 
     ipCallVsBetFreq,
     oopEV: evSum / evIters,
     iterations,
+    approximate: initBoard.length !== 5,
   };
 }

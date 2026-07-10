@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   parseHandHistory,
@@ -74,6 +74,13 @@ export default function AnalyzePage() {
   const [ocrBusy, setOcrBusy] = useState(false);
   const [ocrProgress, setOcrProgress] = useState(0);
   const [ocrError, setOcrError] = useState('');
+  const imageUrlRef = useRef<string | null>(null);
+  const ocrReqId = useRef(0);
+
+  // Revoke the last object URL when the page unmounts.
+  useEffect(() => () => {
+    if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current);
+  }, []);
 
   function analyze() {
     const h = parseHandHistory(text);
@@ -100,23 +107,29 @@ export default function AnalyzePage() {
   async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    setImageUrl((prev) => {
-      if (prev) URL.revokeObjectURL(prev); // free the previous object URL
-      return URL.createObjectURL(file);
-    });
+    // Free the previous object URL, then track the new one in a ref.
+    if (imageUrlRef.current) URL.revokeObjectURL(imageUrlRef.current);
+    const url = URL.createObjectURL(file);
+    imageUrlRef.current = url;
+    setImageUrl(url);
+    // Monotonic request id so a slow earlier OCR can't overwrite a newer upload.
+    const reqId = ++ocrReqId.current;
     setOcr(null);
     setOcrError('');
     setOcrBusy(true);
     setOcrProgress(0);
     try {
-      const { text: ocrText, parsed: result } = await ocrImage(file, setOcrProgress);
+      const { text: ocrText, parsed: result } = await ocrImage(file, (p) => {
+        if (reqId === ocrReqId.current) setOcrProgress(p);
+      });
+      if (reqId !== ocrReqId.current) return; // a newer upload superseded this one
       setOcr(result);
       // Drop the raw OCR text into the textarea so the text parser can also run.
       if (ocrText.trim()) setText(ocrText.trim());
     } catch (err) {
-      setOcrError((err as Error).message || 'OCR에 실패했습니다.');
+      if (reqId === ocrReqId.current) setOcrError((err as Error).message || 'OCR에 실패했습니다.');
     } finally {
-      setOcrBusy(false);
+      if (reqId === ocrReqId.current) setOcrBusy(false);
     }
   }
 

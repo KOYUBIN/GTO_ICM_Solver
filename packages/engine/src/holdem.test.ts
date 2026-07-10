@@ -8,6 +8,7 @@ import {
   applyAction,
   buildPots,
   forfeit,
+  redactFor,
   type TableState,
   type Seat,
 } from './holdem.js';
@@ -296,4 +297,76 @@ test('forfeit: outside a hand just sits the player out', () => {
   let s = game([1000, 1000]);
   s = forfeit(s, s.seats[0].id);
   assert.equal(s.seats[0].status, 'sittingOut');
+});
+
+// ---------- security & rules regressions ----------
+
+test('redactFor never ships the deck or seed, and hides cards on fold-arounds', () => {
+  let s = game([1000, 1000, 1000], 10, 20, 0, 7);
+  s = startHand(s);
+  // Mid-hand: deck and seed must be stripped for every viewer.
+  let v = redactFor(s, 'p0');
+  assert.equal(v.deck.length, 0);
+  assert.equal(v.seed, 0);
+  assert.ok(v.seats.find((x) => x.id === 'p1')!.holeCards.every((c) => c === -1));
+
+  // Fold to one player -> uncontested "showdown": winner's cards stay hidden.
+  s = applyAction(s, s.seats[s.toAct].id, { type: 'fold' });
+  s = applyAction(s, s.seats[s.toAct].id, { type: 'fold' });
+  assert.equal(s.handInProgress, false);
+  assert.ok(s.winners.some((w) => w.hand === 'uncontested'));
+  const winnerId = s.winners[0].seatId;
+  v = redactFor(s, undefined);
+  assert.ok(v.seats.find((x) => x.id === winnerId)!.holeCards.every((c) => c === -1));
+  assert.equal(v.deck.length, 0);
+  assert.equal(v.seed, 0);
+});
+
+test('showdown returns uncalled excess instead of destroying chips', () => {
+  // 3-handed: p0 (button), p1 SB, p2 BB. p0 shoves 1000, p1 calls all-in for
+  // 300, p2 folds -> p0's 700 excess must come back at showdown.
+  let s = game([1000, 300, 1000], 10, 20, 0, 21);
+  s = startHand(s);
+  assert.equal(s.seats[s.toAct].id, 'p0');
+  s = applyAction(s, 'p0', { type: 'allin' });
+  assert.equal(s.seats[s.toAct].id, 'p1');
+  s = applyAction(s, 'p1', { type: 'allin' }); // call-for-less (300)
+  s = applyAction(s, 'p2', { type: 'fold' });
+  assert.equal(s.handInProgress, false);
+  // Total chips conserved: 1000 + 300 + 1000.
+  assert.equal(s.seats.reduce((a, x) => a + x.stack, 0), 2300);
+  // p0 got the uncalled 700 back regardless of who won the 620 pot.
+  const p0 = seatOf(s, 'p0');
+  assert.ok(p0.stack >= 700, `p0 stack ${p0.stack} should include the returned 700`);
+});
+
+test('a short all-in does not re-open action for a player who already acted', () => {
+  // p0 opens to 60; p1 shoves 75 total (short raise: +15 < minRaise 20);
+  // p2 folds; back on p0 -> p0 may call/fold but NOT re-raise.
+  let s = game([1000, 75, 1000], 10, 20, 0, 33);
+  s = startHand(s);
+  s = applyAction(s, 'p0', { type: 'raise', amount: 60 });
+  s = applyAction(s, 'p1', { type: 'allin' }); // 75 total, short of a full raise
+  s = applyAction(s, 'p2', { type: 'fold' });
+  assert.equal(s.seats[s.toAct].id, 'p0');
+  const la = legalActions(s);
+  assert.ok(la.actions.includes('call'));
+  assert.ok(!la.actions.includes('raise'), `raise offered illegally: ${la.actions}`);
+  assert.ok(!la.actions.includes('allin'), `aggressive allin offered illegally: ${la.actions}`);
+  assert.throws(() => applyAction(s, 'p0', { type: 'raise', amount: 200 }), /재개/);
+  assert.throws(() => applyAction(s, 'p0', { type: 'allin' }), /재개/);
+  // Calling closes the round cleanly.
+  s = applyAction(s, 'p0', { type: 'call' });
+  assert.equal(s.handInProgress, false); // heads-up all-in runs out
+});
+
+test('antes keep the preflop call at a full ante+BB even vs a short all-in BB', () => {
+  // BB has only 15 (covers ante 5 + 10 of the 20 BB). currentBet must still be
+  // ante+BB = 25 on the committedThisStreet scale, so p0 can't limp cheap.
+  let s = game([1000, 1000, 15], 10, 20, 5, 55);
+  s = startHand(s);
+  assert.equal(s.currentBet, 25);
+  const la = legalActions(s);
+  // p0 (UTG/button, committed 5 ante) must call 20, not less.
+  assert.equal(la.callAmount, 20);
 });

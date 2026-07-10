@@ -54,6 +54,7 @@ export default function SolverPage() {
     callFreq: number;
     ev: number;
     iters: number;
+    approximate: boolean;
   } | null>(null);
 
   function combosFrom(input: string): Combo[] {
@@ -98,6 +99,7 @@ export default function SolverPage() {
           callFreq: res.ipCallVsBetFreq,
           ev: res.oopEV,
           iters: res.iterations,
+          approximate: res.approximate,
         });
       } catch (e) {
         setError((e as Error).message);
@@ -207,6 +209,12 @@ export default function SolverPage() {
             <p className="muted" style={{ marginTop: 10 }}>
               참고: 균형에서 IP 콜 빈도는 MDF(= 1 − 베팅/(팟+베팅))에 근접합니다.
             </p>
+            {result.approximate && (
+              <p className="muted" style={{ marginTop: 6, fontSize: 13, color: 'var(--warn)' }}>
+                ⚠️ {STREET_KO[result.street]} 솔브는 이후 스트리트를 챈스 샘플링으로 근사합니다 — 전략·EV는
+                근사값이며 시드에 따라 약간 달라집니다. 정밀도를 높이려면 반복수를 올리세요.
+              </p>
+            )}
           </div>
           <div className="card">
             <h2>OOP 전략 ({STREET_KO[result.street]} 핸드별 체크/베팅)</h2>

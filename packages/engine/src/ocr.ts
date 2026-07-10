@@ -41,7 +41,16 @@ function toAmount(s: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-const CARD_RE = /(10|[2-9TJQKAtjqka])\s*([shdcSHDC♠♤♥♡♦♢♣♧])/g;
+// A rank+suit token. The gap is at most one space/tab (never a newline, so a
+// rank and suit can't straddle a line break), and the suit must be followed by a
+// boundary or the start of another card token — so words like "The"/"Ask"/"Add"
+// don't become Th/As/Ad and "Level 9 starts" doesn't yield 9s, while joined hole
+// cards ("KsKc" / "KsKcQd") still chain.
+const CARD_BODY = '(?:10|[2-9TJQKAtjqka])[ \\t]?[shdcSHDC♠♤♥♡♦♢♣♧]';
+const CARD_RE = new RegExp(
+  `(10|[2-9TJQKAtjqka])[ \\t]?([shdcSHDC♠♤♥♡♦♢♣♧])(?=$|[^0-9A-Za-z]|${CARD_BODY})`,
+  'g',
+);
 const POT_HINT = /(pot|팟|총\s*팟|main\s*pot|메인\s*팟|total)/i;
 const AMOUNT_RE = /\d[\d,]{2,}/g; // 3+ digit groups, optionally comma-separated
 
@@ -57,6 +66,7 @@ export function parseOcrPoker(raw: string): OcrPokerResult {
   // joined hole cards like "KsKc" / "KsKcQd" still chain.
   const cards: string[] = [];
   const seen = new Set<string>();
+  const spans: { start: number; end: number }[] = [];
   let m: RegExpExecArray | null;
   let prevEnd = -1;
   CARD_RE.lastIndex = 0;
@@ -65,10 +75,12 @@ export function parseOcrPoker(raw: string): OcrPokerResult {
     const before = start > 0 ? raw[start - 1] : '';
     const okStart = start === 0 || !/[A-Za-z]/.test(before) || start === prevEnd;
     if (!okStart) continue;
-    prevEnd = start + m[0].length;
+    const end = start + m[0].length;
+    prevEnd = end;
     const rank = normRank(m[1]);
     const suit = SUIT_MAP[m[2].toLowerCase()] ?? SUIT_MAP[m[2]];
     if (!suit) continue;
+    spans.push({ start, end });
     const tok = `${rank}${suit}`;
     if (!seen.has(tok)) {
       seen.add(tok);
@@ -76,9 +88,12 @@ export function parseOcrPoker(raw: string): OcrPokerResult {
     }
   }
 
-  // Bare ranks (rank tokens not already captured as a full card). We look at the
-  // raw text with the matched cards removed so we don't double-count.
-  const withoutCards = raw.replace(CARD_RE, ' ');
+  // Bare ranks (rank tokens not captured as a full card). Blank out only the
+  // spans we ACCEPTED as cards (not okStart-rejected matches), preserving offsets
+  // so e.g. the "9" in "Level 9 starts" is still available as a loose rank.
+  const chars = raw.split('');
+  for (const { start, end } of spans) for (let i = start; i < end; i++) chars[i] = ' ';
+  const withoutCards = chars.join('');
   const looseRanks: string[] = [];
   const rankRe = /(?:^|[^0-9A-Za-z])(10|[2-9TJQKA])(?=$|[^0-9A-Za-z])/g;
   let rm: RegExpExecArray | null;
@@ -89,6 +104,7 @@ export function parseOcrPoker(raw: string): OcrPokerResult {
   let am: RegExpExecArray | null;
   AMOUNT_RE.lastIndex = 0;
   while ((am = AMOUNT_RE.exec(raw)) !== null) {
+    if (am.index > 0 && raw[am.index - 1] === '#') continue; // skip hand IDs, e.g. "Hand #210000000001"
     const n = toAmount(am[0]);
     if (n != null) amounts.push(n);
   }
@@ -107,10 +123,13 @@ export function parseOcrPoker(raw: string): OcrPokerResult {
   }
   if (pot == null && amounts.length) pot = amounts[0];
 
-  // Title: first reasonably long line without card/amount noise, e.g. a GTD name.
-  const title = lines.find(
-    (l) => l.length >= 4 && /[A-Za-z가-힣]/.test(l) && !POT_HINT.test(l) && !/^\d/.test(l),
-  );
+  // Title: first line with enough NON-card letters, e.g. a tournament name.
+  // Stripping card tokens first rejects board/hole-card rows like "Ah 7d 2c Ts".
+  const title = lines.find((l) => {
+    if (l.length < 4 || POT_HINT.test(l)) return false;
+    const residual = l.replace(CARD_RE, ' ');
+    return (residual.match(/[A-Za-z가-힣]/g) || []).length >= 3;
+  });
 
   return { cards, looseRanks, pot, amounts, title, lines };
 }

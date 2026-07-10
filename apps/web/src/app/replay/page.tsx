@@ -58,15 +58,15 @@ export default function ReplayPage() {
       if (p.title) setTitle(p.title);
       if (p.pot) setPot(p.pot);
       const cards = (p.cards ?? []).filter((c) => typeof c === 'string');
-      if (cards.length >= 4) {
+      if (cards.length >= 2) {
         // Guess: first two pairs are the two players' hole cards, rest is board.
+        // Handles 2-3 detected cards too (matches the analyze button threshold).
         setPlayers([
           { name: 'P1', pos: 'BTN', cards: cards.slice(0, 2).join('') },
-          { name: 'P2', pos: 'BB', cards: cards.slice(2, 4).join('') },
+          { name: 'P2', pos: 'BB', cards: cards.length >= 4 ? cards.slice(2, 4).join('') : '' },
         ]);
         const board = cards.slice(4, 9);
-        if (board.length >= 3) setBoard(board.join(' '));
-        else setBoard('');
+        setBoard(board.length >= 3 ? board.join(' ') : '');
       }
       setFromOcr(true);
     } catch {

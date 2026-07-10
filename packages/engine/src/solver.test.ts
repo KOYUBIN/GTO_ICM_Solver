@@ -165,6 +165,19 @@ test('ocr: does not mis-read words like GTD/cash as cards, keeps joined cards', 
   assert.ok(r2.cards.includes('8h') && r2.cards.includes('8d'));
 });
 
+test('ocr: rejects English words and cross-line/word-gap phantom cards', () => {
+  assert.equal(parseOcrPoker('The quick Ask Add This game').cards.length, 0);
+  const cross = parseOcrPoker('Level 9 starts\nDealer calls 2');
+  assert.ok(!cross.cards.includes('9s') && !cross.cards.includes('2d'));
+});
+
+test('ocr: hand IDs are not the pot, card rows are not the title', () => {
+  const r = parseOcrPoker('Hand #210000000001\nubin Ks Kc\nPOT 599,114');
+  assert.equal(r.pot, 599114);
+  const t = parseOcrPoker('Ah 7d 2c Ts 9h\n클래식 200억 GTD\nPOT 12000');
+  assert.ok(t.title && t.title.includes('GTD'));
+});
+
 test('solvePostflop: fully-conflicting ranges throw instead of hanging', () => {
   // Both ranges share the Ace of clubs, so no non-conflicting pair exists.
   const oop: Combo[] = [parseCards('AcAd') as Combo];
