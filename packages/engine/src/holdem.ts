@@ -28,6 +28,8 @@ export interface Seat {
   committedTotal: number;
   /** Whether this seat has acted since the last bet/raise on this street. */
   hasActed: boolean;
+  /** Last action label this street (e.g. '콜 20'), for table action bubbles. */
+  lastAction?: string;
 }
 
 export interface Pot {
@@ -211,6 +213,7 @@ export function startHand(state: TableState): TableState {
     seat.committedThisStreet = 0;
     seat.committedTotal = 0;
     seat.hasActed = false;
+    seat.lastAction = undefined;
   }
   const playing = s.seats.filter((x) => x.status === 'active');
   if (playing.length < 2) throw new Error('칩을 가진 플레이어가 2명 이상 필요합니다.');
@@ -260,7 +263,10 @@ export function startHand(state: TableState): TableState {
   const bbPosted = commit(bbSeat, pot, s.bigBlind);
   s.log.push(`${bbSeat.name} 빅블라인드 ${bbPosted}`);
 
-  s.currentBet = Math.max(sbSeat.committedThisStreet, bbSeat.committedThisStreet, s.bigBlind);
+  // Antes are committed into committedThisStreet, so the floor must be on the
+  // same scale (ante + BB); otherwise a short all-in BB drops currentBet to a
+  // bare BB and other players get to see the flop for less than a full call.
+  s.currentBet = Math.max(sbSeat.committedThisStreet, bbSeat.committedThisStreet, s.ante + s.bigBlind);
   s.minRaise = s.bigBlind;
 
   // Deal two hole cards each, starting left of the button. Deal to everyone in
@@ -331,11 +337,16 @@ export function legalActions(state: TableState): LegalActions {
   if (state.currentBet === 0) {
     if (stack > 0) actions.push('bet');
   } else {
-    // Can raise only if you have chips beyond a flat call.
-    if (stack > toCall) actions.push('raise');
+    // Can raise only if you have chips beyond a flat call AND the action is
+    // still open to you: a short all-in that didn't meet the min-raise leaves
+    // already-acted seats (hasActed) with only call/fold rights, not a re-raise.
+    if (stack > toCall && !seat.hasActed) actions.push('raise');
   }
 
-  if (stack > 0) actions.push('allin');
+  // All-in is always legal as a call-for-less; as an aggressive (bet-exceeding)
+  // shove it's only legal when the seat still has action (hasn't acted / was
+  // re-opened by a full raise).
+  if (stack > 0 && (!seat.hasActed || maxTo <= state.currentBet)) actions.push('allin');
 
   // Min/max raise-to. Standard NLHE: min raise increment = last full raise
   // (tracked in minRaise), so min total-to = currentBet + minRaise.
@@ -366,17 +377,20 @@ export function applyAction(state: TableState, seatId: string, action: Action): 
     case 'fold': {
       if (!legal.actions.includes('fold')) throw new Error('폴드할 수 없습니다.');
       seat.status = 'folded';
+      seat.lastAction = '폴드';
       s.log.push(`${seat.name} 폴드`);
       break;
     }
     case 'check': {
       if (toCall !== 0) throw new Error('콜할 금액이 있어 체크할 수 없습니다.');
+      seat.lastAction = '체크';
       s.log.push(`${seat.name} 체크`);
       break;
     }
     case 'call': {
       if (toCall <= 0) throw new Error('콜할 금액이 없습니다.');
       const paid = commit(seat, pot, toCall);
+      seat.lastAction = `콜 ${paid}`;
       s.log.push(`${seat.name} 콜 ${paid}`);
       break;
     }
@@ -385,6 +399,9 @@ export function applyAction(state: TableState, seatId: string, action: Action): 
       const isBet = action.type === 'bet';
       if (isBet && s.currentBet !== 0) throw new Error('이미 베팅이 있어 벳할 수 없습니다.');
       if (!isBet && s.currentBet === 0) throw new Error('베팅이 없어 레이즈할 수 없습니다.');
+      // Action wasn't re-opened to this seat (a prior short all-in didn't meet
+      // the min-raise): it may only call or fold, not re-raise.
+      if (!isBet && seat.hasActed) throw new Error('액션이 재개되지 않아 레이즈할 수 없습니다.');
       const totalTo = action.amount ?? 0;
       const maxTo = seat.committedThisStreet + seat.stack;
       if (totalTo > maxTo) throw new Error('스택보다 큰 금액입니다.');
@@ -407,10 +424,17 @@ export function applyAction(state: TableState, seatId: string, action: Action): 
         // Short all-in: currentBet may rise but action isn't re-opened.
         s.currentBet = Math.max(s.currentBet, seat.committedThisStreet);
       }
+      seat.lastAction = `${isBet ? '벳' : '레이즈'} ${seat.committedThisStreet}`;
       s.log.push(`${seat.name} ${isBet ? '벳' : '레이즈'} ${seat.committedThisStreet}`);
       break;
     }
     case 'allin': {
+      // An aggressive (bet-exceeding) shove is illegal once this seat has acted
+      // and wasn't re-opened; a call-for-less all-in (can't exceed currentBet)
+      // stays legal.
+      if (seat.hasActed && seat.committedThisStreet + seat.stack > s.currentBet) {
+        throw new Error('액션이 재개되지 않아 올인 레이즈할 수 없습니다.');
+      }
       const add = seat.stack;
       const before = s.currentBet;
       const paid = commit(seat, pot, add);
@@ -425,6 +449,7 @@ export function applyAction(state: TableState, seatId: string, action: Action): 
           s.currentBet = newCommitted; // short raise: bar rises, no re-open
         }
       }
+      seat.lastAction = `올인 ${newCommitted}`;
       s.log.push(`${seat.name} 올인 ${paid} (총 ${newCommitted})`);
       break;
     }
@@ -456,6 +481,7 @@ export function forfeit(state: TableState, seatId: string): TableState {
 
   const wasToAct = s.toAct === idx;
   seat.status = 'folded';
+  seat.lastAction = '폴드';
   s.log.push(`${seat.name} 나감 (폴드)`);
 
   if (wasToAct) return advance(s);
@@ -506,7 +532,10 @@ function nextStreet(s: TableState): TableState {
   // Reset per-street betting bookkeeping.
   for (const seat of s.seats) {
     seat.committedThisStreet = 0;
-    if (seat.status === 'active') seat.hasActed = false;
+    if (seat.status === 'active') {
+      seat.hasActed = false;
+      seat.lastAction = undefined;
+    }
   }
   s.currentBet = 0;
   s.minRaise = s.bigBlind;
@@ -629,6 +658,21 @@ function showdown(s: TableState): TableState {
   s.handInProgress = false;
 
   const contenders = liveSeats(s);
+
+  // Return any uncalled excess: chips a seat committed beyond what any live
+  // contender could match (e.g. a big bet only a since-folded/forfeited seat
+  // covered). Without this, buildPots would create a top layer with an empty
+  // eligible list that showdown then drops, permanently destroying those chips.
+  const liveMax = Math.max(...contenders.map((c) => c.committedTotal));
+  for (const seat of s.seats) {
+    if (seat.committedTotal > liveMax) {
+      const excess = seat.committedTotal - liveMax;
+      seat.committedTotal = liveMax;
+      seat.stack += excess;
+      s.log.push(`${seat.name} 콜되지 않은 베팅 ${excess} 반환`);
+    }
+  }
+
   // Score each contender's best 7-card hand.
   const scores = new Map<string, number>();
   for (const seat of contenders) {
@@ -694,7 +738,14 @@ function orderFromButton(s: TableState, ids: string[]): string[] {
  */
 export function redactFor(state: TableState, viewerId?: string): TableState {
   const s = cloneState(state);
-  const reveal = s.currentStreet === 'showdown';
+  // Never ship the undealt deck or the RNG seed to clients: the deck reveals
+  // every upcoming board/opponent card, and the seed reproduces this hand and —
+  // via shuffle(seed + handNumber) — every future hand. Strip both always.
+  s.deck = [];
+  s.seed = 0;
+  // Reveal hole cards only at a genuine showdown, never on an uncontested
+  // (fold-around) win, which also sets currentStreet to 'showdown'.
+  const reveal = s.currentStreet === 'showdown' && !s.winners.some((w) => w.hand === 'uncontested');
   for (const seat of s.seats) {
     if (seat.holeCards.length === 0) continue;
     const isViewer = seat.id === viewerId;

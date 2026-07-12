@@ -19,7 +19,7 @@
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
-import { sql } from '@vercel/postgres';
+import { HAS_PG, pgPool } from './pg';
 import {
   createGame,
   startHand,
@@ -34,8 +34,9 @@ import {
 } from '@gto/engine';
 import type { Room, RoomConfig, RoomView, TournamentClock } from './rooms';
 
-const usePg = !!process.env.POSTGRES_URL;
+const usePg = HAS_PG;
 export const ROOM_STORE_BACKEND = usePg ? 'postgres' : 'file';
+const pg = pgPool;
 
 // ---------- shared logic over a raw Room ----------
 
@@ -357,7 +358,7 @@ function fileWrite(db: Record<string, Room>): Promise<void> {
 let pgReady: Promise<void> | null = null;
 function pgEnsure(): Promise<void> {
   if (!pgReady) {
-    pgReady = sql`CREATE TABLE IF NOT EXISTS rooms (
+    pgReady = pg().sql`CREATE TABLE IF NOT EXISTS rooms (
       id text PRIMARY KEY,
       created_at timestamptz NOT NULL DEFAULT now(),
       updated_at timestamptz NOT NULL DEFAULT now(),
@@ -369,13 +370,13 @@ function pgEnsure(): Promise<void> {
 
 async function pgGet(id: string): Promise<Room | undefined> {
   await pgEnsure();
-  const { rows } = await sql`SELECT data FROM rooms WHERE id = ${id}`;
+  const { rows } = await pg().sql`SELECT data FROM rooms WHERE id = ${id}`;
   return rows[0]?.data as Room | undefined;
 }
 
 async function pgPut(room: Room): Promise<void> {
   await pgEnsure();
-  await sql`INSERT INTO rooms (id, created_at, updated_at, data)
+  await pg().sql`INSERT INTO rooms (id, created_at, updated_at, data)
     VALUES (${room.id}, ${room.createdAt}, ${room.updatedAt}, ${JSON.stringify(room)}::jsonb)
     ON CONFLICT (id) DO UPDATE SET updated_at = ${room.updatedAt}, data = ${JSON.stringify(room)}::jsonb`;
 }
@@ -392,7 +393,7 @@ export async function getRoom(id: string): Promise<Room | undefined> {
 export async function listRooms(): Promise<Room[]> {
   if (usePg) {
     await pgEnsure();
-    const { rows } = await sql`SELECT data FROM rooms ORDER BY updated_at DESC LIMIT 100`;
+    const { rows } = await pg().sql`SELECT data FROM rooms ORDER BY updated_at DESC LIMIT 100`;
     return rows.map((r) => r.data as Room);
   }
   const db = await fileRead();
