@@ -28,6 +28,8 @@ export interface Seat {
   committedTotal: number;
   /** Whether this seat has acted since the last bet/raise on this street. */
   hasActed: boolean;
+  /** Last action label this street (e.g. '콜 20'), for table action bubbles. */
+  lastAction?: string;
 }
 
 export interface Pot {
@@ -211,6 +213,7 @@ export function startHand(state: TableState): TableState {
     seat.committedThisStreet = 0;
     seat.committedTotal = 0;
     seat.hasActed = false;
+    seat.lastAction = undefined;
   }
   const playing = s.seats.filter((x) => x.status === 'active');
   if (playing.length < 2) throw new Error('칩을 가진 플레이어가 2명 이상 필요합니다.');
@@ -374,17 +377,20 @@ export function applyAction(state: TableState, seatId: string, action: Action): 
     case 'fold': {
       if (!legal.actions.includes('fold')) throw new Error('폴드할 수 없습니다.');
       seat.status = 'folded';
+      seat.lastAction = '폴드';
       s.log.push(`${seat.name} 폴드`);
       break;
     }
     case 'check': {
       if (toCall !== 0) throw new Error('콜할 금액이 있어 체크할 수 없습니다.');
+      seat.lastAction = '체크';
       s.log.push(`${seat.name} 체크`);
       break;
     }
     case 'call': {
       if (toCall <= 0) throw new Error('콜할 금액이 없습니다.');
       const paid = commit(seat, pot, toCall);
+      seat.lastAction = `콜 ${paid}`;
       s.log.push(`${seat.name} 콜 ${paid}`);
       break;
     }
@@ -418,6 +424,7 @@ export function applyAction(state: TableState, seatId: string, action: Action): 
         // Short all-in: currentBet may rise but action isn't re-opened.
         s.currentBet = Math.max(s.currentBet, seat.committedThisStreet);
       }
+      seat.lastAction = `${isBet ? '벳' : '레이즈'} ${seat.committedThisStreet}`;
       s.log.push(`${seat.name} ${isBet ? '벳' : '레이즈'} ${seat.committedThisStreet}`);
       break;
     }
@@ -442,6 +449,7 @@ export function applyAction(state: TableState, seatId: string, action: Action): 
           s.currentBet = newCommitted; // short raise: bar rises, no re-open
         }
       }
+      seat.lastAction = `올인 ${newCommitted}`;
       s.log.push(`${seat.name} 올인 ${paid} (총 ${newCommitted})`);
       break;
     }
@@ -473,6 +481,7 @@ export function forfeit(state: TableState, seatId: string): TableState {
 
   const wasToAct = s.toAct === idx;
   seat.status = 'folded';
+  seat.lastAction = '폴드';
   s.log.push(`${seat.name} 나감 (폴드)`);
 
   if (wasToAct) return advance(s);
@@ -523,7 +532,10 @@ function nextStreet(s: TableState): TableState {
   // Reset per-street betting bookkeeping.
   for (const seat of s.seats) {
     seat.committedThisStreet = 0;
-    if (seat.status === 'active') seat.hasActed = false;
+    if (seat.status === 'active') {
+      seat.hasActed = false;
+      seat.lastAction = undefined;
+    }
   }
   s.currentBet = 0;
   s.minRaise = s.bigBlind;

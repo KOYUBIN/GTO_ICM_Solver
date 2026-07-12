@@ -63,13 +63,15 @@ export default function PlayPage() {
     }
   }, [roomId, playerId]);
 
-  // Poll the room ~1.5s while seated.
+  // Poll fast (1s) while a hand is running so the table feels live; relax to
+  // 2.5s between hands / in the lobby.
+  const inHand = !!room?.gameState?.handInProgress;
   useEffect(() => {
     if (!roomId) return;
     poll();
-    const t = setInterval(poll, 1500);
+    const t = setInterval(poll, inHand ? 1000 : 2500);
     return () => clearInterval(t);
-  }, [roomId, poll]);
+  }, [roomId, poll, inHand]);
 
   function enterRoom(id: string, pid: string, name: string) {
     localStorage.setItem(LS_ROOM, id);

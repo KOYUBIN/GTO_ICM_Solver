@@ -1,7 +1,14 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { cardToString, type TableState, type Action, type Seat } from '@gto/engine';
+import {
+  cardToString,
+  evaluate7,
+  categoryOf,
+  type TableState,
+  type Action,
+  type Seat,
+} from '@gto/engine';
 import type { RoomView } from '@/lib/rooms';
 import { sfx, primeAudio } from './sounds';
 import { HandResult } from './HandResult';
@@ -9,48 +16,17 @@ import { HandResult } from './HandResult';
 const SUIT_GLYPH: Record<string, string> = { c: '♣', d: '♦', h: '♥', s: '♠' };
 const RED = new Set(['h', 'd']);
 
-/** Render an engine Card (-1 = face down). */
-function Card({ card, small, deal }: { card: number; small?: boolean; deal?: boolean }) {
-  const w = small ? 26 : 30;
-  const h = small ? 36 : 42;
-  const cls = deal ? ' card-deal' : '';
-  if (card < 0) {
-    return (
-      <span
-        className={`playing-card${cls}`}
-        style={{
-          width: w,
-          height: h,
-          background: 'linear-gradient(135deg,#2a3a55,#1a2030)',
-          color: '#5a6a85',
-          border: '1px solid #3a4a65',
-        }}
-      >
-        ?
-      </span>
-    );
-  }
-  const str = cardToString(card);
-  return (
-    <span className={`playing-card${RED.has(str[1]) ? ' red' : ''}${cls}`} style={{ width: w, height: h }}>
-      {str[0]}
-      {SUIT_GLYPH[str[1]]}
-    </span>
-  );
-}
-
-function statusBadge(s: Seat['status']): { label: string; color: string } | null {
-  switch (s) {
-    case 'folded':
-      return { label: '폴드', color: 'var(--danger)' };
-    case 'allin':
-      return { label: '올인', color: 'var(--warn)' };
-    case 'sittingOut':
-      return { label: '대기', color: 'var(--text-dim)' };
-    default:
-      return null;
-  }
-}
+const RANK_KO = [
+  '하이카드',
+  '원 페어',
+  '투 페어',
+  '트리플',
+  '스트레이트',
+  '플러시',
+  '풀하우스',
+  '포카드',
+  '스트레이트 플러시',
+];
 
 const STREET_KO: Record<string, string> = {
   preflop: '프리플랍',
@@ -59,6 +35,56 @@ const STREET_KO: Record<string, string> = {
   river: '리버',
   showdown: '쇼다운',
 };
+
+/** Render an engine Card (-1 = face down). */
+function Card({ card, w = 34, deal }: { card: number; w?: number; deal?: boolean }) {
+  const h = Math.round(w * 1.4);
+  const cls = deal ? ' card-deal' : '';
+  if (card < 0) {
+    return (
+      <span
+        className={`playing-card card-back${cls}`}
+        style={{ width: w, height: h, fontSize: Math.round(w * 0.5) }}
+      >
+        ◆
+      </span>
+    );
+  }
+  const str = cardToString(card);
+  return (
+    <span
+      className={`playing-card${RED.has(str[1]) ? ' red' : ''}${cls}`}
+      style={{ width: w, height: h, fontSize: Math.round(w * 0.44) }}
+    >
+      {str[0]}
+      {SUIT_GLYPH[str[1]]}
+    </span>
+  );
+}
+
+/** Clock-synced "now" that follows the server clock. */
+function useServerNow(serverNow?: number, tick = 250): number {
+  const offset = useRef(0);
+  useEffect(() => {
+    if (serverNow) offset.current = serverNow - Date.now();
+  }, [serverNow]);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), tick);
+    return () => clearInterval(t);
+  }, [tick]);
+  return now + offset.current;
+}
+
+/** Seat anchor points around the table ellipse; index 0 = bottom center (hero). */
+function seatPositions(n: number): { x: number; y: number }[] {
+  const out: { x: number; y: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const theta = Math.PI / 2 + (2 * Math.PI * i) / n; // start at bottom, go clockwise
+    out.push({ x: 50 + 44 * Math.cos(theta), y: 50 + 41 * Math.sin(theta) });
+  }
+  return out;
+}
 
 const LS_SOUND = 'gto-play-sound';
 
@@ -120,17 +146,19 @@ export function Table({
   }
   useTableSounds(room, youId, soundOn);
 
-  const potTotal = useMemo(() => (state ? state.pots.reduce((a, p) => a + p.amount, 0) : 0), [state]);
-
   return (
     <div>
-      <div className="row" style={{ alignItems: 'center', marginBottom: 16 }}>
+      <div className="row" style={{ alignItems: 'center', marginBottom: 12 }}>
         <div style={{ flex: 2 }}>
-          <h1 style={{ marginBottom: 2 }}>
+          <h1 style={{ marginBottom: 2, fontSize: 22 }}>
             {room.name}
-            {spectating && <span className="pill" style={{ marginLeft: 10, background: 'var(--bg-elevated)', color: 'var(--blue)' }}>관전 중</span>}
+            {spectating && (
+              <span className="pill" style={{ marginLeft: 10, background: 'var(--bg-elevated)', color: 'var(--blue)' }}>
+                관전 중
+              </span>
+            )}
           </h1>
-          <p className="muted" style={{ margin: 0 }}>
+          <p className="muted" style={{ margin: 0, fontSize: 13 }}>
             방 코드 <strong style={{ color: 'var(--accent)', letterSpacing: 2 }}>{room.id}</strong> ·{' '}
             {room.config.presetName} · {room.config.smallBlind}/{room.config.bigBlind}
             {room.config.ante ? ` (A${room.config.ante})` : ''} · {room.players.length}명
@@ -155,7 +183,7 @@ export function Table({
         <Lobby room={room} isHost={isHost} spectating={spectating} onDeal={onDeal} />
       ) : (
         <>
-          <Felt state={state} youId={youId} potTotal={potTotal} />
+          <Felt room={room} state={state} youId={youId} />
           <HandResult state={state} youId={youId} />
           {canRebuy && (
             <div
@@ -178,35 +206,22 @@ export function Table({
                 {spectating ? '관전 종료' : '테이블 나가기'}
               </button>
             </div>
+          ) : spectating ? (
+            <div className="card">
+              <span className="muted">관전 모드입니다. 카드는 쇼다운 때 공개됩니다.</span>
+            </div>
           ) : (
-            <>
-              {state.handInProgress && room.deadline && room.serverNow && room.config.actionTimeoutSec ? (
-                <TurnTimer
-                  deadline={room.deadline}
-                  serverNow={room.serverNow}
-                  total={room.config.actionTimeoutSec}
-                  who={state.toAct >= 0 ? state.seats[state.toAct]?.name ?? '' : ''}
-                />
-              ) : null}
-              {!spectating && (
-                <ActionBar
-                  state={state}
-                  youId={youId}
-                  legal={room.legal ?? null}
-                  onAction={(a) => {
-                    primeAudio();
-                    onAction(a);
-                  }}
-                  isHost={isHost}
-                  onDeal={onDeal}
-                />
-              )}
-              {spectating && (
-                <div className="card">
-                  <span className="muted">관전 모드입니다. 카드는 쇼다운 때 공개됩니다.</span>
-                </div>
-              )}
-            </>
+            <ActionBar
+              state={state}
+              youId={youId}
+              legal={room.legal ?? null}
+              onAction={(a) => {
+                primeAudio();
+                onAction(a);
+              }}
+              isHost={isHost}
+              onDeal={onDeal}
+            />
           )}
           <HandLog log={state.log} />
         </>
@@ -215,50 +230,326 @@ export function Table({
   );
 }
 
-function TurnTimer({
-  deadline,
-  serverNow,
-  total,
-  who,
-}: {
-  deadline: number;
-  serverNow: number;
-  total: number;
-  who: string;
-}) {
-  const offset = useRef(serverNow - Date.now());
-  const [now, setNow] = useState(Date.now() + offset.current);
-  useEffect(() => {
-    offset.current = serverNow - Date.now();
-  }, [serverNow]);
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now() + offset.current), 250);
-    return () => clearInterval(t);
-  }, []);
-  const remainingMs = Math.max(0, deadline - now);
-  const sec = Math.ceil(remainingMs / 1000);
-  const pct = Math.max(0, Math.min(100, (remainingMs / (total * 1000)) * 100));
-  const low = sec <= 8;
+// ---------- the table itself ----------
+
+function Felt({ room, state, youId }: { room: RoomView; state: TableState; youId: string | null }) {
+  const now = useServerNow(room.serverNow);
+  const seats = state.seats.filter((s) => s.status !== 'empty');
+  const n = seats.length;
+
+  // Rotate so the viewer (or seat 0 for spectators) sits bottom-center.
+  const heroIdx = youId ? seats.findIndex((s) => s.id === youId) : 0;
+  const ordered = heroIdx > 0 ? [...seats.slice(heroIdx), ...seats.slice(0, heroIdx)] : seats;
+  const pos = seatPositions(Math.max(n, 2));
+
+  const toActId = state.toAct >= 0 ? state.seats[state.toAct]?.id : undefined;
+  const winnerIds = new Set(state.winners.map((w) => w.seatId));
+  const buttonId = state.seats[state.button]?.id;
+  const potTotal = state.pots.reduce((a, p) => a + p.amount, 0);
+  const timeout = room.config.actionTimeoutSec ?? 0;
+  const timerPct =
+    room.deadline && timeout > 0 && state.handInProgress
+      ? Math.max(0, Math.min(1, (room.deadline - now) / (timeout * 1000)))
+      : null;
+
   return (
-    <div className="card" style={{ padding: '10px 14px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-        <span className="muted">{who ? `${who} 차례` : '액션 대기'}</span>
-        <strong style={{ color: low ? 'var(--danger)' : 'var(--text)', fontVariantNumeric: 'tabular-nums' }}>
-          {sec}초
-        </strong>
-      </div>
-      <div className="bar" style={{ height: 6 }}>
-        <span
-          style={{
-            width: `${pct}%`,
-            background: low ? 'var(--danger)' : 'var(--accent)',
-            transition: 'width 0.25s linear',
-          }}
-        />
+    <div className="poker-rail">
+      <div className="poker-felt">
+        {/* Center: street, board, pot */}
+        <div className="board-center">
+          <div className="pot-label">
+            {STREET_KO[state.currentStreet]} · 팟{' '}
+            <span key={potTotal} className="pot-bump" style={{ fontWeight: 800 }}>
+              {potTotal.toLocaleString()}
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'center', minHeight: 52 }}>
+            {state.board.map((c, i) => (
+              <Card key={`${i}-${c}`} card={c} w={38} deal />
+            ))}
+          </div>
+          {state.pots.length > 1 && (
+            <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+              {state.pots.map((p, i) => `${i === 0 ? '메인' : `사이드${i}`} ${p.amount.toLocaleString()}`).join(' · ')}
+            </div>
+          )}
+        </div>
+
+        {ordered.map((seat, i) => {
+          const p = pos[i] ?? { x: 50, y: 50 };
+          const isYou = !!youId && seat.id === youId;
+          const isTurn = seat.id === toActId && state.handInProgress;
+          const isWinner = winnerIds.has(seat.id);
+          const folded = seat.status === 'folded';
+          const won = state.winners.filter((w) => w.seatId === seat.id).reduce((a, w) => a + w.amount, 0);
+          // Bet chips sit between the seat and the table center.
+          const bx = p.x + (50 - p.x) * 0.42;
+          const by = p.y + (50 - p.y) * 0.42;
+          return (
+            <div key={seat.id}>
+              {seat.committedThisStreet > 0 && (
+                <div className="bet-chip" style={{ left: `${bx}%`, top: `${by}%` }}>
+                  <span className="chip-disc" />
+                  {seat.committedThisStreet.toLocaleString()}
+                </div>
+              )}
+              <div
+                className={`pseat${isTurn ? ' pseat-turn' : ''}${isWinner ? ' pseat-winner' : ''}${folded ? ' pseat-folded' : ''}`}
+                style={{ left: `${p.x}%`, top: `${p.y}%` }}
+              >
+                {seat.lastAction && state.handInProgress && (
+                  <div className={`action-bubble${/폴드/.test(seat.lastAction) ? ' bubble-fold' : /레이즈|벳|올인/.test(seat.lastAction) ? ' bubble-raise' : ''}`}>
+                    {seat.lastAction}
+                  </div>
+                )}
+                <div className="pseat-top">
+                  <div className="pseat-avatar-wrap">
+                    {isTurn && timerPct != null && (
+                      <svg className="turn-ring" viewBox="0 0 56 56">
+                        <circle cx="28" cy="28" r="25" className="turn-ring-bg" />
+                        <circle
+                          cx="28"
+                          cy="28"
+                          r="25"
+                          className="turn-ring-fg"
+                          style={{
+                            strokeDashoffset: 157 * (1 - timerPct),
+                            stroke: timerPct < 0.3 ? 'var(--danger)' : 'var(--accent)',
+                          }}
+                        />
+                      </svg>
+                    )}
+                    <div className="pseat-avatar" style={{ background: avatarColor(seat.name) }}>
+                      {(seat.name || '?').slice(0, 1).toUpperCase()}
+                    </div>
+                    {seat.id === buttonId && <div className="dealer-btn dealer-inseat">D</div>}
+                  </div>
+                  <div className="pseat-cards">
+                    {seat.holeCards.length > 0 &&
+                      !folded &&
+                      seat.holeCards.map((c, ci) => <Card key={`${ci}-${c}`} card={c} w={isYou ? 34 : 26} deal />)}
+                  </div>
+                </div>
+                <div className="pseat-plate">
+                  <div className="pseat-name">
+                    {seat.name}
+                    {isYou ? ' (나)' : ''}
+                    {seat.status === 'allin' && <span className="pill-allin">올인</span>}
+                  </div>
+                  <div className="pseat-stack">{seat.stack.toLocaleString()}</div>
+                </div>
+                {isWinner && won > 0 && <div className="win-float">+{won.toLocaleString()}</div>}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
+
+function avatarColor(name: string): string {
+  const palette = ['#7c5cff', '#0ea5e9', '#f97316', '#ec4899', '#14b8a6', '#eab308', '#8b5cf6', '#22c55e', '#ef4444'];
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return palette[h % palette.length];
+}
+
+// ---------- action bar ----------
+
+function ActionBar({
+  state,
+  youId,
+  legal,
+  onAction,
+  isHost,
+  onDeal,
+}: {
+  state: TableState;
+  youId: string | null;
+  legal: RoomView['legal'];
+  onAction: (a: Action) => void;
+  isHost: boolean;
+  onDeal: () => void;
+}) {
+  const myTurn = !!youId && state.toAct >= 0 && state.seats[state.toAct]?.id === youId;
+  const over = state.currentStreet === 'showdown' || !state.handInProgress;
+  const me = youId ? state.seats.find((s) => s.id === youId) : undefined;
+
+  // Pre-select an action while waiting (commercial-style 체크/폴드 · 콜 예약).
+  const [preSel, setPreSel] = useState<null | 'checkfold' | 'call'>(null);
+  useEffect(() => {
+    if (!state.handInProgress) setPreSel(null);
+  }, [state.handInProgress, state.handNumber]);
+  useEffect(() => {
+    if (!preSel || !myTurn || !legal || !legal.actions.length) return;
+    const sel = preSel;
+    setPreSel(null);
+    if (sel === 'checkfold') {
+      onAction({ type: legal.actions.includes('check') ? 'check' : 'fold' });
+    } else {
+      if (legal.actions.includes('call')) onAction({ type: 'call' });
+      else if (legal.actions.includes('check')) onAction({ type: 'check' });
+      else setPreSel(null); // e.g. must fold/raise — don't auto-act
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preSel, myTurn, legal]);
+
+  // Hero hand-rank badge (evaluate over hole + board; works from 2 to 7 cards).
+  const rank = useMemo(() => {
+    if (!me || me.holeCards.length !== 2 || me.holeCards.some((c) => c < 0)) return null;
+    if (me.status === 'folded') return null;
+    try {
+      return RANK_KO[categoryOf(evaluate7([...me.holeCards, ...state.board]))];
+    } catch {
+      return null;
+    }
+  }, [me, state.board]);
+
+  if (over) {
+    return (
+      <div className="card" style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+        <span className="muted">핸드 종료.</span>
+        {isHost ? (
+          <button onClick={onDeal}>다음 핸드</button>
+        ) : (
+          <span className="muted">호스트가 다음 핸드를 딜하길 기다리는 중…</span>
+        )}
+      </div>
+    );
+  }
+
+  if (!myTurn || !legal) {
+    const who = state.toAct >= 0 ? state.seats[state.toAct]?.name : '';
+    const canPre = !!me && me.status === 'active';
+    return (
+      <div className="card actionbar">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+          <span className="muted">{who ? `${who}의 차례입니다…` : '대기 중…'}</span>
+          {rank && <span className="rank-badge">{rank}</span>}
+          {canPre && (
+            <span style={{ display: 'flex', gap: 8, marginLeft: 'auto' }}>
+              <button
+                className={`secondary presel${preSel === 'checkfold' ? ' presel-on' : ''}`}
+                onClick={() => setPreSel(preSel === 'checkfold' ? null : 'checkfold')}
+              >
+                체크/폴드 예약
+              </button>
+              <button
+                className={`secondary presel${preSel === 'call' ? ' presel-on' : ''}`}
+                onClick={() => setPreSel(preSel === 'call' ? null : 'call')}
+              >
+                콜 예약
+              </button>
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return <MyActions state={state} legal={legal} onAction={onAction} rank={rank} />;
+}
+
+function MyActions({
+  state,
+  legal,
+  onAction,
+  rank,
+}: {
+  state: TableState;
+  legal: NonNullable<RoomView['legal']>;
+  onAction: (a: Action) => void;
+  rank: string | null;
+}) {
+  const canRaise = legal.actions.includes('bet') || legal.actions.includes('raise');
+  const raiseType: Action['type'] = legal.actions.includes('bet') ? 'bet' : 'raise';
+  const [amount, setAmount] = useState(legal.minRaiseTo);
+  useEffect(() => setAmount(legal.minRaiseTo), [legal.minRaiseTo]);
+  const clamped = Math.min(Math.max(amount, legal.minRaiseTo), legal.maxRaiseTo);
+
+  const pot = state.pots.reduce((a, p) => a + p.amount, 0);
+  const toCall = legal.callAmount;
+  // Pot-fraction raise-to: currentBet + f * (pot after our call).
+  const fracTo = (f: number) =>
+    Math.min(legal.maxRaiseTo, Math.max(legal.minRaiseTo, Math.round(state.currentBet + f * (pot + toCall))));
+
+  const presets: { label: string; to: number }[] = [
+    { label: '최소', to: legal.minRaiseTo },
+    { label: '⅓팟', to: fracTo(1 / 3) },
+    { label: '½팟', to: fracTo(1 / 2) },
+    { label: '⅔팟', to: fracTo(2 / 3) },
+    { label: '팟', to: fracTo(1) },
+    { label: '올인', to: legal.maxRaiseTo },
+  ];
+
+  return (
+    <div className="card actionbar actionbar-live">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <strong style={{ color: 'var(--accent)' }}>내 차례</strong>
+        {rank && <span className="rank-badge">{rank}</span>}
+      </div>
+      <div className="action-buttons">
+        {legal.actions.includes('fold') && (
+          <button className="btn-fold" onClick={() => onAction({ type: 'fold' })}>
+            폴드
+          </button>
+        )}
+        {legal.actions.includes('check') && (
+          <button className="btn-check" onClick={() => onAction({ type: 'check' })}>
+            체크
+          </button>
+        )}
+        {legal.actions.includes('call') && (
+          <button className="btn-call" onClick={() => onAction({ type: 'call' })}>
+            콜 {legal.callAmount.toLocaleString()}
+          </button>
+        )}
+        {canRaise && (
+          <button className="btn-raise" onClick={() => onAction({ type: raiseType, amount: clamped })}>
+            {raiseType === 'bet' ? '벳' : '레이즈'} {clamped.toLocaleString()}
+          </button>
+        )}
+        {legal.actions.includes('allin') && !canRaise && (
+          <button className="btn-raise" onClick={() => onAction({ type: 'allin' })}>
+            올인 {legal.maxRaiseTo.toLocaleString()}
+          </button>
+        )}
+      </div>
+
+      {canRaise && legal.maxRaiseTo > legal.minRaiseTo && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+            {presets.map((p) => (
+              <button
+                key={p.label}
+                className={`secondary preset${clamped === p.to ? ' preset-on' : ''}`}
+                onClick={() => setAmount(p.to)}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <input
+            type="range"
+            min={legal.minRaiseTo}
+            max={legal.maxRaiseTo}
+            step={1}
+            value={clamped}
+            onChange={(e) => setAmount(+e.target.value)}
+            style={{ width: '100%' }}
+          />
+          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+            {legal.minRaiseTo.toLocaleString()} ~ {legal.maxRaiseTo.toLocaleString()} · 선택:{' '}
+            <strong style={{ color: 'var(--text)' }}>{clamped.toLocaleString()}</strong>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------- misc panels ----------
 
 function ClockBar({ clock }: { clock: NonNullable<RoomView['clock']> }) {
   const mm = Math.floor(clock.secondsLeft / 60);
@@ -334,210 +625,12 @@ function Lobby({
   );
 }
 
-function Felt({ state, youId, potTotal }: { state: TableState; youId: string | null; potTotal: number }) {
-  const toActId = state.toAct >= 0 ? state.seats[state.toAct]?.id : undefined;
-  const winnerIds = new Set(state.winners.map((w) => w.seatId));
-
-  return (
-    <div
-      className="card"
-      style={{
-        background: 'radial-gradient(ellipse at center, #14361f 0%, #0d2415 70%, #0a1a10 100%)',
-        border: '2px solid #21492e',
-        padding: 24,
-      }}
-    >
-      <div style={{ textAlign: 'center', marginBottom: 20 }}>
-        <div className="muted" style={{ marginBottom: 6 }}>
-          {STREET_KO[state.currentStreet]} · 팟{' '}
-          <span key={potTotal} className="pot-bump" style={{ fontWeight: 700, color: 'var(--text)' }}>
-            {potTotal.toLocaleString()}
-          </span>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'center', gap: 6, minHeight: 42 }}>
-          {state.board.length === 0 ? (
-            <span className="muted">— 보드 —</span>
-          ) : (
-            state.board.map((c, i) => <Card key={`${i}-${c}`} card={c} deal />)
-          )}
-        </div>
-        {state.pots.length > 1 && (
-          <div className="muted" style={{ marginTop: 8 }}>
-            {state.pots.map((p, i) => `${i === 0 ? '메인' : `사이드${i}`} ${p.amount}`).join(' · ')}
-          </div>
-        )}
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
-        {state.seats.map((seat, idx) => {
-          if (seat.status === 'empty') return null; // a seat someone left
-          const isYou = !!youId && seat.id === youId;
-          const isTurn = seat.id === toActId;
-          const isButton = idx === state.button;
-          const isWinner = winnerIds.has(seat.id);
-          const badge = statusBadge(seat.status);
-          return (
-            <div
-              key={seat.id}
-              className={isTurn ? 'seat-turn' : isWinner ? 'seat-winner' : ''}
-              style={{
-                background: isYou ? 'var(--bg-card)' : 'var(--bg-elevated)',
-                border: `2px solid ${isTurn ? 'var(--accent)' : isWinner ? 'var(--warn)' : 'var(--border)'}`,
-                borderRadius: 10,
-                padding: 12,
-                opacity: seat.status === 'folded' ? 0.55 : 1,
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <strong style={{ fontSize: 14 }}>
-                  {seat.name}
-                  {isYou ? ' (나)' : ''} {isButton ? '🔘' : ''}
-                </strong>
-                {badge && (
-                  <span className="pill" style={{ color: badge.color, background: 'rgba(0,0,0,0.25)' }}>
-                    {badge.label}
-                  </span>
-                )}
-              </div>
-              <div className="muted" style={{ margin: '4px 0' }}>
-                스택 {seat.stack.toLocaleString()}
-                {seat.committedThisStreet > 0 ? ` · 베팅 ${seat.committedThisStreet}` : ''}
-              </div>
-              <div style={{ display: 'flex', gap: 4 }}>
-                {seat.holeCards.length ? (
-                  seat.holeCards.map((c, i) => <Card key={`${i}-${c}`} card={c} small deal />)
-                ) : (
-                  <span className="muted" style={{ fontSize: 12 }}>—</span>
-                )}
-              </div>
-              {isWinner && (
-                <div style={{ color: 'var(--warn)', fontSize: 12, marginTop: 4, fontWeight: 700 }}>
-                  +{state.winners.filter((w) => w.seatId === seat.id).reduce((a, w) => a + w.amount, 0)}{' '}
-                  {state.winners.find((w) => w.seatId === seat.id)?.hand}
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function ActionBar({
-  state,
-  youId,
-  legal,
-  onAction,
-  isHost,
-  onDeal,
-}: {
-  state: TableState;
-  youId: string | null;
-  legal: RoomView['legal'];
-  onAction: (a: Action) => void;
-  isHost: boolean;
-  onDeal: () => void;
-}) {
-  const myTurn = !!youId && state.toAct >= 0 && state.seats[state.toAct]?.id === youId;
-  const showdown = state.currentStreet === 'showdown' || !state.handInProgress;
-
-  if (showdown) {
-    return (
-      <div className="card" style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-        <span className="muted">핸드 종료.</span>
-        {isHost ? (
-          <button onClick={onDeal}>다음 핸드</button>
-        ) : (
-          <span className="muted">호스트가 다음 핸드를 딜하길 기다리는 중…</span>
-        )}
-      </div>
-    );
-  }
-
-  if (!myTurn || !legal) {
-    const who = state.toAct >= 0 ? state.seats[state.toAct]?.name : '';
-    return (
-      <div className="card">
-        <span className="muted">{who ? `${who}의 차례입니다…` : '대기 중…'}</span>
-      </div>
-    );
-  }
-
-  return <MyActions legal={legal} onAction={onAction} />;
-}
-
-function MyActions({ legal, onAction }: { legal: NonNullable<RoomView['legal']>; onAction: (a: Action) => void }) {
-  const canRaise = legal.actions.includes('bet') || legal.actions.includes('raise');
-  const [amount, setAmount] = useState(legal.minRaiseTo);
-  const clamped = Math.min(Math.max(amount, legal.minRaiseTo), legal.maxRaiseTo);
-  const raiseType: Action['type'] = legal.actions.includes('bet') ? 'bet' : 'raise';
-
-  return (
-    <div className="card" style={{ border: '2px solid var(--accent)' }}>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: canRaise ? 14 : 0 }}>
-        {legal.actions.includes('fold') && (
-          <button className="secondary" onClick={() => onAction({ type: 'fold' })}>
-            폴드
-          </button>
-        )}
-        {legal.actions.includes('check') && (
-          <button className="secondary" onClick={() => onAction({ type: 'check' })}>
-            체크
-          </button>
-        )}
-        {legal.actions.includes('call') && (
-          <button onClick={() => onAction({ type: 'call' })}>콜 {legal.callAmount.toLocaleString()}</button>
-        )}
-        {canRaise && (
-          <button onClick={() => onAction({ type: raiseType, amount: clamped })}>
-            {raiseType === 'bet' ? '벳' : '레이즈'} {clamped.toLocaleString()}
-          </button>
-        )}
-        {legal.actions.includes('allin') && (
-          <button onClick={() => onAction({ type: 'allin' })} style={{ background: 'var(--warn)' }}>
-            올인 {legal.maxRaiseTo.toLocaleString()}
-          </button>
-        )}
-      </div>
-
-      {canRaise && legal.maxRaiseTo > legal.minRaiseTo && (
-        <div>
-          <label>
-            베팅 사이즈: <strong>{clamped.toLocaleString()}</strong> (최소 {legal.minRaiseTo} / 최대{' '}
-            {legal.maxRaiseTo})
-          </label>
-          <input
-            type="range"
-            min={legal.minRaiseTo}
-            max={legal.maxRaiseTo}
-            step={1}
-            value={clamped}
-            onChange={(e) => setAmount(+e.target.value)}
-            style={{ width: '100%' }}
-          />
-          <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-            {[0.5, 0.75, 1].map((frac) => {
-              const v = Math.round(legal.minRaiseTo + (legal.maxRaiseTo - legal.minRaiseTo) * frac);
-              return (
-                <button key={frac} className="secondary" onClick={() => setAmount(v)} style={{ padding: '5px 10px' }}>
-                  {frac === 1 ? '맥스' : `${frac * 100}%`}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function HandLog({ log }: { log: string[] }) {
   if (!log.length) return null;
   return (
     <div className="card">
       <h2>핸드 로그</h2>
-      <div style={{ maxHeight: 220, overflowY: 'auto', fontSize: 13, lineHeight: 1.7 }}>
+      <div style={{ maxHeight: 200, overflowY: 'auto', fontSize: 13, lineHeight: 1.7 }}>
         {log
           .slice()
           .reverse()

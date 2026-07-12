@@ -299,6 +299,20 @@ test('forfeit: outside a hand just sits the player out', () => {
   assert.equal(s.seats[0].status, 'sittingOut');
 });
 
+test('lastAction bubbles: set on actions, folded persists, active clears per street', () => {
+  let s = game([1000, 1000, 1000], 10, 20, 0, 42);
+  s = startHand(s); // p0 to act
+  s = applyAction(s, 'p0', { type: 'raise', amount: 60 });
+  assert.equal(seatOf(s, 'p0').lastAction, '레이즈 60');
+  s = applyAction(s, 'p1', { type: 'fold' });
+  assert.equal(seatOf(s, 'p1').lastAction, '폴드');
+  s = applyAction(s, 'p2', { type: 'call' });
+  // Street advanced to flop: active seats' bubbles clear, folded seat's stays.
+  assert.equal(s.currentStreet, 'flop');
+  assert.equal(seatOf(s, 'p0').lastAction, undefined);
+  assert.equal(seatOf(s, 'p1').lastAction, '폴드');
+});
+
 // ---------- security & rules regressions ----------
 
 test('redactFor never ships the deck or seed, and hides cards on fold-arounds', () => {
