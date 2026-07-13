@@ -256,7 +256,7 @@ export default function ChartsPage() {
       </div>
 
       {tab === 'ev' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.35fr) minmax(280px, 1fr)', gap: 16, alignItems: 'start' }}>
+        <div className="split-2col">
           <div className="card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
               <h2 style={{ margin: 0, fontSize: 16 }}>{strategy.label}</h2>
@@ -526,6 +526,7 @@ function Validation() {
       </p>
       {!rows && <p className="muted">«검증 실행»을 누르세요. (169핸드 × 6스택 몬테카를로 — 몇 초 소요)</p>}
       {rows && (
+        <div className="table-scroll">
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
           <thead>
             <tr style={{ color: 'var(--text-dim)', textAlign: 'right' }}>
@@ -552,6 +553,7 @@ function Validation() {
             })}
           </tbody>
         </table>
+        </div>
       )}
       <p className="muted" style={{ fontSize: 11, marginTop: 10 }}>
         * 셔브가 단조적으로 넓어지고(스택↓) 프리미엄은 항상 셔브, 트래시는 폴드인지(질적 검증) + Nash
