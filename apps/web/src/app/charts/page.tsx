@@ -256,7 +256,7 @@ export default function ChartsPage() {
       </div>
 
       {tab === 'ev' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.35fr) minmax(280px, 1fr)', gap: 16, alignItems: 'start' }}>
+        <div className="split-2col">
           <div className="card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
               <h2 style={{ margin: 0, fontSize: 16 }}>{strategy.label}</h2>

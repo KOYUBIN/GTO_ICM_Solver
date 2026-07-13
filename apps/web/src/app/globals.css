@@ -280,7 +280,9 @@ button:disabled {
 /* 13x13 range grid */
 .range-grid {
   display: grid;
-  grid-template-columns: repeat(13, 1fr);
+  /* minmax(0, 1fr) lets the 13 columns shrink below label min-content width, so
+     the grid squeezes onto phone screens instead of overflowing the viewport. */
+  grid-template-columns: repeat(13, minmax(0, 1fr));
   gap: 2px;
   max-width: 560px;
 }
@@ -297,6 +299,8 @@ button:disabled {
   color: var(--text-dim);
   cursor: default;
   user-select: none;
+  overflow: hidden;
+  min-width: 0;
 }
 
 .range-cell.on {
@@ -790,4 +794,66 @@ button:disabled {
   height: 18px;
   font-size: 10px;
   z-index: 4;
+}
+
+/* ---- mobile responsiveness ---- */
+@media (max-width: 720px) {
+  .topbar {
+    padding: 10px 12px;
+    gap: 6px;
+  }
+  .brand {
+    font-size: 16px;
+    margin-right: 8px;
+  }
+  /* One-row, horizontally swipeable nav instead of 3 stacked rows. */
+  .nav {
+    flex: 1 1 100%;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    margin: 0 -12px;
+    padding: 0 12px;
+  }
+  .nav::-webkit-scrollbar {
+    display: none;
+  }
+  .nav a {
+    flex: 0 0 auto;
+    padding: 7px 10px;
+    font-size: 13px;
+  }
+  .container {
+    padding: 18px 12px 48px;
+  }
+  h1 {
+    font-size: 21px;
+  }
+  .range-cell {
+    font-size: 9px;
+    border-radius: 2px;
+  }
+  .card {
+    padding: 14px;
+  }
+  /* Any data table scrolls inside its card instead of stretching the page. */
+  .card table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+}
+
+/* Two-panel layout that stacks on phones (used by charts strategy+detail). */
+.split-2col {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 860px) {
+  .split-2col {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

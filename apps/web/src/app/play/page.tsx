@@ -294,12 +294,13 @@ function Landing({
       {roomBackend === 'file' && (
         <div className="card" style={{ border: '2px solid var(--warn)', background: 'rgba(210,153,34,0.08)' }}>
           <strong style={{ color: 'var(--warn)' }}>⚠️ 멀티플레이 저장소가 임시 모드입니다</strong>
-          <p className="muted" style={{ margin: '6px 0 0', fontSize: 13 }}>
-            이 배포는 데이터베이스가 연결돼 있지 않아 방이 서버 인스턴스마다 따로 저장됩니다. 그래서 다른
-            사람이 같은 코드로 들어와도 <strong>“방이 존재하지 않습니다”</strong>가 뜰 수 있습니다.
-            친구들과 함께 하려면 Vercel 대시보드에서 Postgres 데이터베이스(예: Neon)를 만들어 프로젝트에
-            연결한 뒤 재배포하세요. (연결되면 이 경고가 사라집니다.)
+          <p className="muted" style={{ margin: '6px 0 10px', fontSize: 13 }}>
+            데이터베이스가 연결돼 있지 않아 다른 사람이 같은 코드로 들어와도{' '}
+            <strong>“방이 존재하지 않습니다”</strong>가 뜰 수 있습니다. 2~3분이면 무료로 연결할 수 있어요.
           </p>
+          <a href="/setup">
+            <button style={{ background: 'var(--warn)' }}>DB 연결 가이드 열기 →</button>
+          </a>
         </div>
       )}
 
