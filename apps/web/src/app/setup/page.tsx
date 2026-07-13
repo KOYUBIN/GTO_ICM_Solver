@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 
 interface Health {
   ok: boolean;
@@ -73,8 +74,8 @@ export default function SetupPage() {
         </div>
         {connected && (
           <p className="muted" style={{ marginTop: 10 }}>
-            이제 <a href="/play" style={{ color: 'var(--accent)', fontWeight: 700 }}>홀덤</a>에서 방을 만들고
-            코드를 공유하면 친구들이 어디서든 참가할 수 있습니다.
+            이제 <Link href="/play" style={{ color: 'var(--accent)', fontWeight: 700 }}>홀덤</Link>에서 방을
+            만들고 코드를 공유하면 친구들이 어디서든 참가할 수 있습니다.
           </p>
         )}
       </div>

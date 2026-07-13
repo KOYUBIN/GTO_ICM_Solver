@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import {
   createRoom,
   joinRoom,
@@ -298,9 +299,9 @@ function Landing({
             데이터베이스가 연결돼 있지 않아 다른 사람이 같은 코드로 들어와도{' '}
             <strong>“방이 존재하지 않습니다”</strong>가 뜰 수 있습니다. 2~3분이면 무료로 연결할 수 있어요.
           </p>
-          <a href="/setup">
-            <button style={{ background: 'var(--warn)' }}>DB 연결 가이드 열기 →</button>
-          </a>
+          <Link href="/setup" className="btn-link" style={{ background: 'var(--warn)' }}>
+            DB 연결 가이드 열기 →
+          </Link>
         </div>
       )}
 
