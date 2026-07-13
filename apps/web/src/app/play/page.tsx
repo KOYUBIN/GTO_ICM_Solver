@@ -42,6 +42,7 @@ export default function PlayPage() {
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [room, setRoom] = useState<RoomView | null>(null);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
 
   // Restore a session from localStorage on mount (seated or spectating).
   useEffect(() => {
@@ -53,6 +54,17 @@ export default function PlayPage() {
     }
   }, []);
 
+  /** Drop the saved session and return to the lobby (no server call). */
+  const resetToLobby = useCallback((msg?: string) => {
+    localStorage.removeItem(LS_ROOM);
+    localStorage.removeItem(LS_PLAYER);
+    setRoomId(null);
+    setPlayerId(null);
+    setRoom(null);
+    setError('');
+    if (msg) setNotice(msg);
+  }, []);
+
   const poll = useCallback(async () => {
     if (!roomId) return;
     try {
@@ -60,9 +72,17 @@ export default function PlayPage() {
       setRoom(v);
       setError('');
     } catch (e) {
+      // The saved room no longer exists (expired / server restarted / storage
+      // switched): clear the stale session instead of polling a dead room.
+      if ((e as Error).name === 'RoomNotFound') {
+        resetToLobby(
+          `저장돼 있던 방(${roomId})을 찾을 수 없어 로비로 돌아왔습니다. 방이 만료됐거나 서버 저장소가 초기화됐습니다 — 새 방을 만들어 주세요.`,
+        );
+        return;
+      }
       setError((e as Error).message);
     }
-  }, [roomId, playerId]);
+  }, [roomId, playerId, resetToLobby]);
 
   // Poll fast (1s) while a hand is running so the table feels live; relax to
   // 2.5s between hands / in the lobby.
@@ -143,13 +163,18 @@ export default function PlayPage() {
             onRebuy={onRebuy}
           />
         ) : (
-          <p className="muted">방 불러오는 중…</p>
+          <div className="card" style={{ textAlign: 'center', padding: 28 }}>
+            <p className="muted" style={{ marginTop: 0 }}>방 불러오는 중…</p>
+            <button className="secondary" onClick={() => resetToLobby()}>
+              처음으로 돌아가기
+            </button>
+          </div>
         )}
       </div>
     );
   }
 
-  return <Landing onEnter={enterRoom} onSpectate={spectate} />;
+  return <Landing onEnter={enterRoom} onSpectate={spectate} notice={notice} />;
 }
 
 // ---------- landing: create / join ----------
@@ -157,9 +182,11 @@ export default function PlayPage() {
 function Landing({
   onEnter,
   onSpectate,
+  notice,
 }: {
   onEnter: (id: string, pid: string, name: string) => void;
   onSpectate: (id: string) => void;
+  notice?: string;
 }) {
   const [name, setName] = useState('');
   const [presetId, setPresetId] = useState('classic');
@@ -291,6 +318,12 @@ function Landing({
         방을 만들어 코드를 공유하면 친구들이 참가합니다. 칩·블라인드 프리셋을 고르거나 직접
         설정하세요.
       </p>
+
+      {notice && (
+        <div className="card" style={{ border: '1px solid var(--blue)', background: 'rgba(88,166,255,0.07)' }}>
+          <span className="muted" style={{ color: 'var(--blue)' }}>{notice}</span>
+        </div>
+      )}
 
       {roomBackend === 'file' && (
         <div className="card" style={{ border: '2px solid var(--warn)', background: 'rgba(210,153,34,0.08)' }}>

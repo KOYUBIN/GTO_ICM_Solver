@@ -11,6 +11,6 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const { id } = await params;
   const playerId = req.nextUrl.searchParams.get('playerId') ?? undefined;
   const room = await tickAndGet(id);
-  if (!room) return NextResponse.json({ error: 'not found' }, { status: 404 });
+  if (!room) return NextResponse.json({ error: '방을 찾을 수 없습니다' }, { status: 404 });
   return NextResponse.json(toView(room, playerId));
 }
