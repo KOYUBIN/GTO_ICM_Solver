@@ -117,7 +117,13 @@ export async function joinRoom(
 export async function fetchRoom(id: string, playerId?: string): Promise<RoomView> {
   const qs = playerId ? `?playerId=${encodeURIComponent(playerId)}` : '';
   const res = await fetch(`/api/rooms/${encodeURIComponent(id)}${qs}`, { cache: 'no-store' });
-  if (!res.ok) throw new Error((await safeErr(res)) || '방을 찾을 수 없습니다');
+  if (!res.ok) {
+    const err = new Error((await safeErr(res)) || '방을 찾을 수 없습니다');
+    // Mark 404s so the client can drop a stale saved session instead of
+    // polling a dead room forever.
+    if (res.status === 404) err.name = 'RoomNotFound';
+    throw err;
+  }
   return res.json();
 }
 
