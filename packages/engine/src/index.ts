@@ -14,6 +14,7 @@ export * from './preflop.js';
 export * from './charts.js';
 export * from './cfr.js';
 export * from './spotev.js';
+export * from './simdata.js';
 export * from './enumerate.js';
 export * from './history.js';
 export * from './replay.js';

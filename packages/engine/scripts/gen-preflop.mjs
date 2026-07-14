@@ -64,11 +64,11 @@ const SEED_BASE = 20260714;
 // hands; the aggregate fold-through is (1-X)^playersBehind), and how many
 // non-blind seats are behind (drives the positional realization base).
 const POSITIONS = {
-  UTG: { playersBehind: 5, continuePercent: 14, ipBehind: 3 },
-  MP: { playersBehind: 4, continuePercent: 17, ipBehind: 2 },
-  CO: { playersBehind: 3, continuePercent: 21, ipBehind: 1 },
-  BTN: { playersBehind: 2, continuePercent: 28, ipBehind: 0 },
-  SB: { playersBehind: 1, continuePercent: 48, ipBehind: 5 }, // OOP vs BB postflop
+  UTG: { playersBehind: 5, continuePercent: 17, ipBehind: 3 },
+  MP: { playersBehind: 4, continuePercent: 18, ipBehind: 2 },
+  CO: { playersBehind: 3, continuePercent: 24, ipBehind: 1 },
+  BTN: { playersBehind: 2, continuePercent: 31, ipBehind: 0 },
+  SB: { playersBehind: 1, continuePercent: 52, ipBehind: 5 }, // OOP vs BB postflop
 };
 
 // Shallower stacks: continues get more 3bet-shove-heavy. The single-caller
@@ -82,7 +82,7 @@ const STACK_ADJ = {
 
 // Hand-quality realization factor from the Chen score (~-1.5 .. 20):
 // premium hands realize (almost) all of their equity, trash realizes little.
-const HAND_FACTOR = { base: 0.32, perChen: 0.05, min: 0.35, max: 1.1 };
+const HAND_FACTOR = { base: 0.24, perChen: 0.058, min: 0.3, max: 1.1 };
 
 function handFactor(chen) {
   const f = HAND_FACTOR.base + HAND_FACTOR.perChen * chen;
