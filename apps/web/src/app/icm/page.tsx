@@ -1,97 +1,417 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { icm, riskPremium } from '@gto/engine';
+import { icm, riskPremium, bubbleFactor, payoutsFor, PAYOUT_PRESETS } from '@gto/engine';
+
+const CUSTOM_ID = 'custom';
+const MAX_PLAYERS = 10;
+const MIN_PLAYERS = 2;
+const MAX_PLACES = 10;
+const DEFAULT_PRESET = 'sng-9max';
+
+interface PlayerRow {
+  name: string;
+  stack: string;
+}
+
+const DEFAULT_PLAYERS: PlayerRow[] = [
+  { name: '플레이어 1', stack: '5000' },
+  { name: '플레이어 2', stack: '4000' },
+  { name: '플레이어 3', stack: '3000' },
+  { name: '플레이어 4', stack: '1500' },
+];
+
+/** 0.335 → "33.5" (프리셋 분수를 % 입력 문자열로). */
+function fractionToPctStr(f: number): string {
+  return String(Math.round(f * 10000) / 100);
+}
+
+/** 금액 표시 (₩/칩 공용, -0 방지). */
+function fmtAmount(x: number): string {
+  return (Math.round(x) || 0).toLocaleString('ko-KR');
+}
+
+function bfAdvice(bf: number): string {
+  if (!Number.isFinite(bf)) return '이겨도 ICM 지분이 늘지 않는 스팟 — 올인할 이유가 없습니다';
+  if (bf <= 1.05) return '칩EV와 거의 동일 — 부담 없이 플레이';
+  if (bf < 1.25) return '가벼운 ICM 압박 — 약간 타이트하게';
+  if (bf < 1.7) return '상당한 압박 — 타이트하게';
+  return '극심한 버블 압박 — 매우 타이트하게';
+}
 
 export default function IcmPage() {
-  const [stacksStr, setStacksStr] = useState('5000, 3000, 1500, 500');
-  const [payoutsStr, setPayoutsStr] = useState('50, 30, 20');
+  const [players, setPlayers] = useState<PlayerRow[]>(DEFAULT_PLAYERS);
+  const [presetId, setPresetId] = useState(DEFAULT_PRESET);
+  const [prizePoolStr, setPrizePoolStr] = useState('1000000');
+  const [payoutPcts, setPayoutPcts] = useState<string[]>(() =>
+    payoutsFor(DEFAULT_PLAYERS.length, DEFAULT_PRESET).map(fractionToPctStr),
+  );
+  const [heroIdx, setHeroIdx] = useState(0);
+  const [villainIdx, setVillainIdx] = useState(1);
 
+  // ---- 파생 값 ----
   const stacks = useMemo(
-    () => stacksStr.split(',').map((s) => Number(s.trim())).filter((n) => !Number.isNaN(n)),
-    [stacksStr],
+    () => players.map((p) => Math.max(0, Number(p.stack) || 0)),
+    [players],
   );
-  const payouts = useMemo(
-    () => payoutsStr.split(',').map((s) => Number(s.trim())).filter((n) => !Number.isNaN(n)),
-    [payoutsStr],
+  const totalChips = useMemo(() => stacks.reduce((a, b) => a + b, 0), [stacks]);
+  const fractions = useMemo(
+    () => payoutPcts.map((s) => Math.max(0, Number(s) || 0) / 100),
+    [payoutPcts],
   );
+  const pctSum = useMemo(() => fractions.reduce((a, b) => a + b, 0) * 100, [fractions]);
+  const sumOk = Math.abs(pctSum - 100) < 0.5;
+  const prizePool = Math.max(0, Number(prizePoolStr) || 0);
+
+  const canCalc = totalChips > 0 && fractions.some((f) => f > 0);
 
   const result = useMemo(() => {
-    if (stacks.length < 2 || payouts.length < 1) return null;
-    return icm(stacks, payouts);
-  }, [stacks, payouts]);
+    if (!canCalc) return null;
+    return icm(stacks, fractions);
+  }, [canCalc, stacks, fractions]);
 
-  // Bubble risk premium for player 0 shoving into player 1 for their stack.
-  const rp = useMemo(() => {
-    if (stacks.length < 2) return null;
-    const amount = Math.min(stacks[0], stacks[1]);
-    return riskPremium(stacks, payouts, 0, 1, amount);
-  }, [stacks, payouts]);
+  // ---- 버블 팩터 (히어로/빌런 인덱스는 인원 변경 시 안전하게 클램프) ----
+  const n = players.length;
+  const hero = Math.min(heroIdx, n - 1);
+  let villain = Math.min(villainIdx, n - 1);
+  if (villain === hero) villain = hero === 0 ? 1 : 0;
 
-  const totalPrize = payouts.reduce((a, b) => a + b, 0);
+  const bubble = useMemo(() => {
+    if (!canCalc || stacks[hero] <= 0 || stacks[villain] <= 0) return null;
+    const bf = bubbleFactor(stacks, fractions, hero, villain);
+    const amount = Math.min(stacks[hero], stacks[villain]);
+    const rp = riskPremium(stacks, fractions, hero, villain, amount);
+    return { bf, rp };
+  }, [canCalc, stacks, fractions, hero, villain]);
+
+  // ---- 핸들러 ----
+  function applyPreset(id: string) {
+    setPresetId(id);
+    if (id === CUSTOM_ID) return;
+    setPayoutPcts(payoutsFor(players.length, id).map(fractionToPctStr));
+  }
+
+  function syncPayoutsToCount(count: number) {
+    if (presetId !== CUSTOM_ID) {
+      setPayoutPcts(payoutsFor(count, presetId).map(fractionToPctStr));
+    }
+  }
+
+  function addPlayer() {
+    if (players.length >= MAX_PLAYERS) return;
+    const next = [...players, { name: `플레이어 ${players.length + 1}`, stack: '1000' }];
+    setPlayers(next);
+    syncPayoutsToCount(next.length);
+  }
+
+  function removePlayer(i: number) {
+    if (players.length <= MIN_PLAYERS) return;
+    const next = players.filter((_, x) => x !== i);
+    setPlayers(next);
+    syncPayoutsToCount(next.length);
+  }
+
+  function updatePlayer(i: number, patch: Partial<PlayerRow>) {
+    setPlayers(players.map((p, x) => (x === i ? { ...p, ...patch } : p)));
+  }
+
+  function updatePayout(i: number, value: string) {
+    setPayoutPcts(payoutPcts.map((v, x) => (x === i ? value : v)));
+    setPresetId(CUSTOM_ID);
+  }
+
+  function addPayoutPlace() {
+    if (payoutPcts.length >= MAX_PLACES) return;
+    setPayoutPcts([...payoutPcts, '5']);
+    setPresetId(CUSTOM_ID);
+  }
+
+  function removePayoutPlace(i: number) {
+    if (payoutPcts.length <= 1) return;
+    setPayoutPcts(payoutPcts.filter((_, x) => x !== i));
+    setPresetId(CUSTOM_ID);
+  }
+
+  function onHeroChange(i: number) {
+    if (i === villain) setVillainIdx(hero);
+    setHeroIdx(i);
+  }
+
+  function onVillainChange(i: number) {
+    if (i === hero) setHeroIdx(villain);
+    setVillainIdx(i);
+  }
+
+  const playerName = (i: number) => players[i]?.name.trim() || `플레이어 ${i + 1}`;
 
   return (
     <div className="container">
       <h1>ICM 계산기</h1>
       <p className="subtitle">
-        Malmuth-Harville 모델로 칩 스택을 상금 기대값으로 환산하고, 버블 리스크 프리미엄을 계산합니다.
+        Malmuth-Harville 모델로 칩 스택을 상금 기대값으로 환산합니다. 상금 구조 프리셋, 칩찹(chip-chop)
+        비교, 버블 팩터까지 한 번에 확인하세요.
       </p>
 
+      {/* 1. 상금 구조 */}
       <div className="card">
+        <h2>상금 구조</h2>
         <div className="row">
           <div>
-            <label>스택 (쉼표 구분)</label>
-            <input type="text" value={stacksStr} onChange={(e) => setStacksStr(e.target.value)} />
+            <label>프리셋</label>
+            <select value={presetId} onChange={(e) => applyPreset(e.target.value)}>
+              {PAYOUT_PRESETS.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+              <option value={CUSTOM_ID}>커스텀 (직접 입력)</option>
+            </select>
           </div>
           <div>
-            <label>상금 구조 (쉼표 구분)</label>
-            <input type="text" value={payoutsStr} onChange={(e) => setPayoutsStr(e.target.value)} />
+            <label>총 상금 (₩ 또는 칩)</label>
+            <input
+              type="number"
+              min={0}
+              step="any"
+              value={prizePoolStr}
+              onChange={(e) => setPrizePoolStr(e.target.value)}
+            />
           </div>
+        </div>
+
+        <label style={{ marginTop: 16 }}>순위별 배분율 (%)</label>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+            gap: 10,
+          }}
+        >
+          {payoutPcts.map((v, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span className="muted" style={{ minWidth: 30, textAlign: 'right' }}>
+                {i + 1}위
+              </span>
+              <input
+                type="number"
+                min={0}
+                step="any"
+                value={v}
+                onChange={(e) => updatePayout(i, e.target.value)}
+                style={{ flex: 1, minWidth: 0 }}
+              />
+              <button
+                className="secondary"
+                onClick={() => removePayoutPlace(i)}
+                disabled={payoutPcts.length <= 1}
+                title="이 순위 삭제"
+                style={{ padding: '6px 10px' }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <button className="secondary" onClick={addPayoutPlace} disabled={payoutPcts.length >= MAX_PLACES}>
+            + 순위 추가
+          </button>
+          <span className={`pill ${sumOk ? 'push' : 'marginal'}`}>합계 {pctSum.toFixed(2)}%</span>
+          {!sumOk && (
+            <span className="muted" style={{ color: 'var(--warn)' }}>
+              배분율 합계가 100%가 아닙니다 — ICM 상금 합계가 총 상금과 달라집니다.
+            </span>
+          )}
         </div>
       </div>
 
-      {result && (
+      {/* 2. 플레이어 스택 */}
+      <div className="card">
+        <h2>
+          플레이어 스택 <span className="muted">({MIN_PLAYERS}~{MAX_PLAYERS}명)</span>
+        </h2>
+        <div style={{ display: 'flex', gap: 10, marginBottom: 6 }}>
+          <span className="muted" style={{ flex: 1.2, minWidth: 0 }}>
+            이름
+          </span>
+          <span className="muted" style={{ flex: 1, minWidth: 0 }}>
+            스택 (칩)
+          </span>
+          <span style={{ width: 38 }} />
+        </div>
+        {players.map((p, i) => (
+          <div key={i} style={{ display: 'flex', gap: 10, marginBottom: 8, alignItems: 'center' }}>
+            <input
+              type="text"
+              value={p.name}
+              onChange={(e) => updatePlayer(i, { name: e.target.value })}
+              style={{ flex: 1.2, minWidth: 0 }}
+            />
+            <input
+              type="number"
+              min={0}
+              step="any"
+              value={p.stack}
+              onChange={(e) => updatePlayer(i, { stack: e.target.value })}
+              style={{ flex: 1, minWidth: 0 }}
+            />
+            <button
+              className="secondary"
+              onClick={() => removePlayer(i)}
+              disabled={players.length <= MIN_PLAYERS}
+              title="이 플레이어 삭제"
+              style={{ padding: '6px 10px', width: 38 }}
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <button className="secondary" onClick={addPlayer} disabled={players.length >= MAX_PLAYERS}>
+            + 플레이어 추가
+          </button>
+          <span className="muted">총 칩: {fmtAmount(totalChips)}</span>
+        </div>
+      </div>
+
+      {/* 3. 결과 테이블 */}
+      {result ? (
         <div className="card">
-          <h2>플레이어별 ICM 기대값</h2>
-          {result.equities.map((eq, i) => {
-            const pct = totalPrize ? (eq / totalPrize) * 100 : 0;
-            return (
-              <div key={i} style={{ marginBottom: 12 }}>
-                <div className="stat" style={{ border: 'none', paddingBottom: 4 }}>
-                  <span>
-                    P{i + 1} · {stacks[i].toLocaleString()} 칩
-                  </span>
-                  <span className="val">
-                    {eq.toFixed(2)} <span className="muted">({pct.toFixed(1)}%)</span>
-                  </span>
-                </div>
-                <div className="bar">
-                  <span style={{ width: `${pct}%` }} />
-                </div>
-              </div>
-            );
-          })}
+          <h2>ICM 결과 — 칩찹 비교</h2>
+          <div className="table-scroll">
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+              <thead>
+                <tr style={{ color: 'var(--text-dim)', textAlign: 'right' }}>
+                  <th style={{ textAlign: 'left', padding: '6px 8px 6px 0' }}>플레이어</th>
+                  <th style={{ padding: '6px 8px' }}>스택</th>
+                  <th style={{ padding: '6px 8px' }}>스택 점유율</th>
+                  <th style={{ padding: '6px 8px' }}>ICM 지분</th>
+                  <th style={{ padding: '6px 8px' }}>ICM 상금</th>
+                  <th style={{ padding: '6px 8px' }}>칩찹 상금</th>
+                  <th style={{ padding: '6px 0 6px 8px' }}>ICM − 칩찹</th>
+                </tr>
+              </thead>
+              <tbody>
+                {players.map((_, i) => {
+                  const eq = result.equities[i]; // 상금 풀 분수
+                  const stackShare = totalChips > 0 ? stacks[i] / totalChips : 0;
+                  const icmPrize = eq * prizePool;
+                  const chopPrize = stackShare * prizePool;
+                  const diff = icmPrize - chopPrize;
+                  const rel = eq - stackShare;
+                  const better = rel > 0.001;
+                  const worse = rel < -0.001;
+                  const color = better ? 'var(--accent)' : worse ? 'var(--danger)' : 'var(--text-dim)';
+                  return (
+                    <tr key={i} style={{ borderTop: '1px solid var(--border)', textAlign: 'right' }}>
+                      <td style={{ textAlign: 'left', padding: '8px 8px 8px 0', fontWeight: 600 }}>
+                        {playerName(i)}
+                      </td>
+                      <td style={{ padding: '8px' }}>{fmtAmount(stacks[i])}</td>
+                      <td style={{ padding: '8px' }}>{(stackShare * 100).toFixed(2)}%</td>
+                      <td style={{ padding: '8px', fontWeight: 700 }}>{(eq * 100).toFixed(2)}%</td>
+                      <td style={{ padding: '8px', fontWeight: 700 }}>{fmtAmount(icmPrize)}</td>
+                      <td style={{ padding: '8px' }}>{fmtAmount(chopPrize)}</td>
+                      <td style={{ padding: '8px 0 8px 8px', whiteSpace: 'nowrap' }}>
+                        <span style={{ color, fontWeight: 700, marginRight: 8 }}>
+                          {diff >= 0 ? '+' : ''}
+                          {fmtAmount(diff)}
+                        </span>
+                        <span className={`pill ${better ? 'push' : worse ? 'fold' : 'marginal'}`}>
+                          {better ? 'ICM 유리' : worse ? 'ICM 불리' : '비슷'}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="muted" style={{ marginBottom: 0 }}>
+            칩찹(chip-chop)은 스택 비율 그대로 상금을 나누는 단순 분배입니다. 숏스택은 보통 ICM이
+            유리(생존 가치 반영)하고, 빅스택은 칩찹이 유리합니다 — 딜 협상 시 참고하세요.
+          </p>
+        </div>
+      ) : (
+        <div className="card">
+          <p className="muted" style={{ margin: 0 }}>
+            스택 합계가 0이거나 배분율이 비어 있어 계산할 수 없습니다. 입력을 확인하세요.
+          </p>
         </div>
       )}
 
-      {rp !== null && (
-        <div className="card">
-          <h2>버블 리스크 프리미엄</h2>
-          <p className="muted" style={{ marginTop: 0 }}>
-            P1이 P2에게 올인할 때, 칩EV 기준 50% 브레이크이븐 대비 추가로 필요한 에쿼티입니다.
-          </p>
-          <div className="stat">
-            <span>리스크 프리미엄</span>
-            <span className="val" style={{ color: rp > 0 ? 'var(--warn)' : 'var(--accent)' }}>
-              {(rp * 100).toFixed(2)}%p
-            </span>
+      {/* 4. 버블 팩터 미니 툴 */}
+      <div className="card">
+        <h2>버블 팩터</h2>
+        <p className="muted" style={{ marginTop: 0 }}>
+          히어로가 빌런과 이펙티브 스택 올인을 할 때, 이기며 얻는 ICM 지분 대비 지며 잃는 지분의
+          비율입니다. 칩EV에서는 항상 1이며, 클수록 타이트하게 플레이해야 합니다.
+        </p>
+        <div className="row">
+          <div>
+            <label>히어로</label>
+            <select value={hero} onChange={(e) => onHeroChange(Number(e.target.value))}>
+              {players.map((_, i) => (
+                <option key={i} value={i}>
+                  {playerName(i)}
+                </option>
+              ))}
+            </select>
           </div>
-          <div className="stat">
-            <span>필요 콜 에쿼티</span>
-            <span className="val">{((0.5 + rp) * 100).toFixed(1)}%</span>
+          <div>
+            <label>빌런</label>
+            <select value={villain} onChange={(e) => onVillainChange(Number(e.target.value))}>
+              {players.map((_, i) => (
+                <option key={i} value={i}>
+                  {playerName(i)}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
-      )}
+
+        {bubble ? (
+          <div style={{ marginTop: 14 }}>
+            <div className="stat">
+              <span>버블 팩터</span>
+              <span
+                className="val"
+                style={{
+                  color:
+                    !Number.isFinite(bubble.bf) || bubble.bf > 1.25
+                      ? 'var(--warn)'
+                      : 'var(--accent)',
+                }}
+              >
+                {Number.isFinite(bubble.bf) ? bubble.bf.toFixed(2) : '∞'}
+              </span>
+            </div>
+            <div className="stat">
+              <span>리스크 프리미엄 (칩EV 50% 대비)</span>
+              <span
+                className="val"
+                style={{ color: bubble.rp > 0 ? 'var(--warn)' : 'var(--accent)' }}
+              >
+                {(bubble.rp * 100).toFixed(2)}%p
+              </span>
+            </div>
+            <div className="stat">
+              <span>필요 콜 에쿼티</span>
+              <span className="val">{((0.5 + bubble.rp) * 100).toFixed(1)}%</span>
+            </div>
+            <p className="muted" style={{ marginBottom: 0 }}>
+              {Number.isFinite(bubble.bf)
+                ? `${bubble.bf.toFixed(2)} = 이득 1당 리스크 ${bubble.bf.toFixed(2)} — ${bfAdvice(bubble.bf)}.`
+                : `∞ — ${bfAdvice(bubble.bf)}.`}
+            </p>
+          </div>
+        ) : (
+          <p className="muted" style={{ marginBottom: 0, marginTop: 14 }}>
+            히어로와 빌런 모두 0보다 큰 스택이 필요합니다.
+          </p>
+        )}
+      </div>
     </div>
   );
 }

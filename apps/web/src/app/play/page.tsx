@@ -255,6 +255,13 @@ function Landing({
 
   useEffect(() => {
     setName(localStorage.getItem(LS_NAME) ?? '');
+    // Logged-in account: prefill the nickname with the account nick (editable).
+    fetch('/api/auth/me')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.user?.nick) setName(d.user.nick);
+      })
+      .catch(() => {});
   }, []);
 
   function buildConfig(): RoomConfig {
