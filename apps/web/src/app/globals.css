@@ -872,3 +872,55 @@ a.btn-link:hover {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* 4-color deck: much faster suit recognition (♠ black ♥ red ♦ blue ♣ green). */
+.playing-card {
+  font-weight: 800;
+  letter-spacing: -0.5px;
+}
+.playing-card.suit-s { color: #14181f; }
+.playing-card.suit-h { color: #d92b39; }
+.playing-card.suit-d { color: #1f6ae0; }
+.playing-card.suit-c { color: #178a4c; }
+/* Legacy .red kept for any stragglers */
+.playing-card.red { color: #d92b39; }
+
+/* ---- card & range pickers ---- */
+.picker-suit-row {
+  display: flex;
+  gap: 3px;
+  margin-bottom: 3px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+}
+.pick-card {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 40px;
+  border-radius: 5px;
+  background: #fff;
+  border: 1px solid #00000022;
+  font-weight: 800;
+  font-size: 12px;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.05;
+  cursor: pointer;
+  padding: 0;
+}
+.pick-card:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+.pick-card.picked {
+  outline: 3px solid var(--accent);
+  outline-offset: -2px;
+}
+.range-cell.editable {
+  cursor: pointer;
+}
+.range-cell.editable:hover {
+  outline: 1px solid var(--accent);
+}

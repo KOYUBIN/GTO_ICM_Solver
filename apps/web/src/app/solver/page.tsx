@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { solvePostflop, parseRange, rangeToCombos, gridLabel, cardRank, cardSuit, parseCards, type Combo } from '@gto/engine';
 import { ActionGrid } from '@/components/ActionGrid';
 import { PlayingCards } from '@/components/Cards';
+import { BoardPicker, HandGridPicker } from '@/components/Pickers';
 
 const ACTION_COLORS = [
   { action: 'bet', color: '#f85149', label: '베팅' },
@@ -47,6 +48,8 @@ export default function SolverPage() {
   const [iterations, setIterations] = useState(12000);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [showBoardPick, setShowBoardPick] = useState(true);
+  const [gridFor, setGridFor] = useState<null | 'oop' | 'ip'>(null);
   const [result, setResult] = useState<{
     street: 'flop' | 'turn' | 'river';
     grid: Map<string, Record<string, number>>;
@@ -120,26 +123,55 @@ export default function SolverPage() {
       </p>
 
       <div className="card">
-        <label>보드 (3·4·5장 · 예: Ks7h2c / KsQd7h2c / KsQd7h2c3s)</label>
-        <input type="text" value={board} onChange={(e) => setBoard(e.target.value)} />
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <label style={{ margin: 0 }}>보드 (3·4·5장)</label>
+          <button className="secondary" onClick={() => setShowBoardPick((v) => !v)} style={{ padding: '3px 10px', fontSize: 12 }}>
+            {showBoardPick ? '카드 선택 접기' : '카드로 선택'}
+          </button>
+        </div>
+        <input type="text" value={board} placeholder="예: Ks7h2c — 또는 아래에서 탭" onChange={(e) => setBoard(e.target.value)} style={{ marginTop: 6 }} />
+        {showBoardPick && (
+          <div style={{ marginTop: 10 }}>
+            <BoardPicker value={board} onChange={setBoard} max={5} />
+          </div>
+        )}
         <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 10 }}>
           {cleanBoard.length >= 2 && <PlayingCards cards={cleanBoard} />}
           {street ? (
             <span className="pill">{STREET_KO[street]} 솔브</span>
           ) : (
-            <span className="muted" style={{ fontSize: 13 }}>3·4·5장을 입력하세요</span>
+            <span className="muted" style={{ fontSize: 13 }}>3·4·5장을 선택하세요</span>
           )}
         </div>
         <div className="row" style={{ marginTop: 14 }}>
           <div>
-            <label>OOP 레인지</label>
-            <input type="text" value={oopRange} onChange={(e) => setOopRange(e.target.value)} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <label style={{ margin: 0 }}>OOP 레인지</label>
+              <button className="secondary" onClick={() => setGridFor(gridFor === 'oop' ? null : 'oop')} style={{ padding: '3px 10px', fontSize: 12 }}>
+                {gridFor === 'oop' ? '그리드 닫기' : '그리드로 선택'}
+              </button>
+            </div>
+            <input type="text" value={oopRange} onChange={(e) => setOopRange(e.target.value)} style={{ marginTop: 6 }} />
           </div>
           <div>
-            <label>IP 레인지</label>
-            <input type="text" value={ipRange} onChange={(e) => setIpRange(e.target.value)} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <label style={{ margin: 0 }}>IP 레인지</label>
+              <button className="secondary" onClick={() => setGridFor(gridFor === 'ip' ? null : 'ip')} style={{ padding: '3px 10px', fontSize: 12 }}>
+                {gridFor === 'ip' ? '그리드 닫기' : '그리드로 선택'}
+              </button>
+            </div>
+            <input type="text" value={ipRange} onChange={(e) => setIpRange(e.target.value)} style={{ marginTop: 6 }} />
           </div>
         </div>
+        {gridFor && (
+          <div style={{ marginTop: 12 }}>
+            <label>{gridFor === 'oop' ? 'OOP' : 'IP'} 레인지 그리드 선택</label>
+            <HandGridPicker
+              value={gridFor === 'oop' ? oopRange : ipRange}
+              onChange={(v) => (gridFor === 'oop' ? setOopRange(v) : setIpRange(v))}
+            />
+          </div>
+        )}
         <div className="row" style={{ marginTop: 14 }}>
           <div>
             <label>팟 (칩)</label>
