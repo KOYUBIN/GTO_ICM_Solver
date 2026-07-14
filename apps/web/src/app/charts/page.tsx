@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   getChart,
   shoveEv,
@@ -36,6 +36,11 @@ const LINES: { value: ActionLine; label: string }[] = [
 
 type Tab = 'ev' | 'equity' | 'validate';
 
+/** Minimal state needed to reproduce a viewed spot. */
+type RecentSpot = { heroPos: Position; villainPos: Position; line: ActionLine; stackBB: number };
+
+const RECENTS_KEY = 'gto-chart-recents';
+
 // Approximate heads-up Nash SB-shove percentages (commonly cited reference).
 const NASH_HU_SHOVE: Record<number, number> = { 6: 48, 8: 42, 10: 37, 12: 33, 15: 28, 20: 23 };
 const ALL_LABELS = allGridLabels();
@@ -61,8 +66,35 @@ export default function ChartsPage() {
   const [raiseTo, setRaiseTo] = useState(2.5);
   const [callPercent, setCallPercent] = useState(18);
   const [selected, setSelected] = useState<string | null>('AA');
+  const [recents, setRecents] = useState<RecentSpot[]>([]);
 
   const vsRfiPairs = useMemo(() => availableVsRfi(), []);
+
+  // Persist the viewed spot to localStorage (newest first, deduped, max 6).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const entry: RecentSpot = { heroPos, villainPos, line, stackBB };
+      const entryKey = JSON.stringify(entry);
+      const raw = window.localStorage.getItem(RECENTS_KEY);
+      const prev: RecentSpot[] = raw ? JSON.parse(raw) : [];
+      const next = [
+        entry,
+        ...(Array.isArray(prev) ? prev : []).filter((r) => JSON.stringify(r) !== entryKey),
+      ].slice(0, 6);
+      window.localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
+      setRecents(next);
+    } catch {
+      // localStorage unavailable (SSR/private mode) — ignore.
+    }
+  }, [heroPos, villainPos, line, stackBB]);
+
+  function restoreSpot(r: RecentSpot) {
+    setHeroPos(r.heroPos);
+    setVillainPos(r.villainPos);
+    setLine(r.line);
+    setStackBB(r.stackBB);
+  }
 
   const strategy = useMemo(
     () =>
@@ -115,6 +147,18 @@ export default function ChartsPage() {
     return { rows, best, realization };
   }, [selected, stackBB, callPercent, raiseTo, playersBehind, continueRange]);
 
+  // Labels to send to the solver: raising range, falling back to continue range.
+  const solverLabels = useMemo(() => {
+    const entries = [...strategy.hands.entries()];
+    const raises = entries.filter(([, f]) => (f.raise ?? 0) > 0.5).map(([label]) => label);
+    if (raises.length) return raises;
+    return entries.filter(([, f]) => (f.raise ?? 0) + (f.call ?? 0) > 0.5).map(([label]) => label);
+  }, [strategy]);
+
+  function openInSolver() {
+    window.open(`/solver?oop=${encodeURIComponent(solverLabels.join(', '))}`, '_blank');
+  }
+
   const selFreqs = selected ? strategy.hands.get(selected) : undefined;
   const combos = selected ? labelToCombos(selected) : [];
   const bestColor = actionEvs?.rows.find((r) => r.key === actionEvs.best)?.color ?? '#2a323d';
@@ -126,6 +170,23 @@ export default function ChartsPage() {
         스팟을 고르면 GTO 전략 그리드를, 핸드를 클릭하면 콤보별 액션 EV를 봅니다. 100bb 6맥스 GTO 근사
         + 칩EV 근사입니다.
       </p>
+
+      {/* Recent spots */}
+      {recents.length > 0 && (
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
+          <span className="muted" style={{ fontSize: 13 }}>최근 스팟:</span>
+          {recents.map((r, i) => (
+            <button
+              key={i}
+              className="secondary"
+              style={{ padding: '4px 10px', fontSize: 13, borderRadius: 999 }}
+              onClick={() => restoreSpot(r)}
+            >
+              {r.line === 'vs-RFI' ? `${r.heroPos} vs ${r.villainPos}` : `${r.heroPos} RFI`} · {r.stackBB}bb
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Spot bar */}
       <div className="card" style={{ padding: 14 }}>
@@ -260,15 +321,26 @@ export default function ChartsPage() {
           <div className="card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
               <h2 style={{ margin: 0, fontSize: 16 }}>{strategy.label}</h2>
-              <span
-                className="pill"
-                style={{
-                  background: strategy.source === 'chart' ? 'rgba(63,185,80,0.15)' : 'rgba(210,153,34,0.15)',
-                  color: strategy.source === 'chart' ? 'var(--accent)' : 'var(--warn)',
-                }}
-              >
-                {strategy.source === 'chart' ? '차트 데이터' : '휴리스틱 근사'}
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                {strategy.hands.size > 0 && (
+                  <button
+                    className="secondary"
+                    style={{ padding: '4px 10px', fontSize: 13 }}
+                    onClick={openInSolver}
+                  >
+                    이 레인지로 솔버 열기
+                  </button>
+                )}
+                <span
+                  className="pill"
+                  style={{
+                    background: strategy.source === 'chart' ? 'rgba(63,185,80,0.15)' : 'rgba(210,153,34,0.15)',
+                    color: strategy.source === 'chart' ? 'var(--accent)' : 'var(--warn)',
+                  }}
+                >
+                  {strategy.source === 'chart' ? '차트 데이터' : '휴리스틱 근사'}
+                </span>
+              </div>
             </div>
             <ActionGrid data={gridData} colors={ACTION_COLORS} selected={selected} onSelect={setSelected} />
             <p className="muted" style={{ marginTop: 10 }}>

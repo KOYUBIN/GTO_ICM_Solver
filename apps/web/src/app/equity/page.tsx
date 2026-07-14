@@ -3,6 +3,13 @@
 import { useState } from 'react';
 import { calcEquity, rangeToCombos, parseRange, type PlayerSpec } from '@gto/engine';
 import { PlayingCards } from '@/components/Cards';
+import { BoardPicker } from '@/components/Pickers';
+
+/** Card-string of an input, but only when it's exact cards (not a range). */
+function exactCardsOf(input: string): string {
+  const t = input.replace(/[\s,]/g, '');
+  return /^([2-9TJQKA][cdhs])+$/i.test(t) ? t : '';
+}
 
 interface Result {
   labels: string[];
@@ -16,6 +23,7 @@ export default function EquityPage() {
   const [hero, setHero] = useState('AsKs');
   const [villain, setVillain] = useState('QQ-99, AQs+');
   const [board, setBoard] = useState('');
+  const [showBoardPicker, setShowBoardPicker] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState('');
@@ -77,6 +85,24 @@ export default function EquityPage() {
         <div style={{ marginTop: 14 }}>
           <label>보드 (선택, 예: Ah7d2c)</label>
           <input type="text" value={board} onChange={(e) => setBoard(e.target.value)} />
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => setShowBoardPicker((v) => !v)}
+            style={{ marginTop: 8, padding: '4px 10px', fontSize: 12 }}
+          >
+            카드로 선택 {showBoardPicker ? '▲' : '▼'}
+          </button>
+          {showBoardPicker && (
+            <div style={{ marginTop: 8 }}>
+              <BoardPicker
+                value={board}
+                onChange={setBoard}
+                max={5}
+                used={exactCardsOf(hero) + exactCardsOf(villain)}
+              />
+            </div>
+          )}
         </div>
         <div style={{ marginTop: 16 }}>
           <button onClick={run} disabled={busy}>

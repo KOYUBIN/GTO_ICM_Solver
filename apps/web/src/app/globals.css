@@ -924,3 +924,13 @@ a.btn-link:hover {
 .range-cell.editable:hover {
   outline: 1px solid var(--accent);
 }
+
+/* Highlighted nav item for the flagship game link. */
+.nav a.nav-hot {
+  color: var(--accent);
+  font-weight: 700;
+  border: 1px solid rgba(63, 185, 80, 0.4);
+}
+.nav a.nav-hot.active {
+  background: rgba(63, 185, 80, 0.12);
+}

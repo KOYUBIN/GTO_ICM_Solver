@@ -2,6 +2,11 @@ import Link from 'next/link';
 
 const FEATURES = [
   {
+    href: '/play',
+    title: '🃏 멀티플레이 홀덤',
+    desc: '공개 로비 또는 방 코드로 친구들과 실시간 노리밋 홀덤. 채팅·핸드 히스토리·에쿼티 분석까지.',
+  },
+  {
     href: '/equity',
     title: '에쿼티 계산기',
     desc: '핸드 vs 핸드 / 핸드 vs 레인지 승률을 몬테카를로로 계산합니다.',
@@ -40,11 +45,6 @@ const FEATURES = [
     href: '/replay',
     title: '핸드 리플레이 (WPL식)',
     desc: '올인 핸드를 입력해 스트리트별 에쿼티(예: 88 vs KK 19.5%)와 승자·배드빗을 분석합니다.',
-  },
-  {
-    href: '/play',
-    title: '멀티플레이 홀덤',
-    desc: '방을 만들어 코드를 공유하고 친구들과 실시간 노리밋 홀덤을 칩·블라인드 프리셋으로 플레이합니다.',
   },
   {
     href: '/community',
