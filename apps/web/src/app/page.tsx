@@ -3,6 +3,11 @@ import { InstallButton } from '@/components/InstallButton';
 
 const FEATURES = [
   {
+    href: '/notes',
+    title: '핸드 기록장 · 개인 노트',
+    desc: '오프라인 라이브 세션 핸드를 기록하고(포지션·카드·결과·메모) 개인 노트를 남깁니다. 저장은 내 기기에.',
+  },
+  {
     href: '/play',
     title: '🃏 멀티플레이 홀덤',
     desc: '공개 로비 또는 방 코드로 친구들과 실시간 노리밋 홀덤. 채팅·핸드 히스토리·에쿼티 분석까지.',

@@ -17,11 +17,13 @@ import {
   POSITIONS_6MAX,
   availableVsRfi,
   availableRfiVs3bet,
+  simRfiRange,
   type Position,
   type ActionLine,
   type PreflopAction,
 } from '@gto/engine';
 import { ActionGrid } from '@/components/ActionGrid';
+import { RangeGrid } from '@/components/RangeGrid';
 import { PlayingCards } from '@/components/Cards';
 
 const ACTION_COLORS = [
@@ -162,6 +164,28 @@ export default function ChartsPage() {
   function openInSolver() {
     window.open(`/solver?oop=${encodeURIComponent(solverLabels.join(', '))}`, '_blank');
   }
+
+  // Self-simulation RFI comparison (RFI line only; BB has no open).
+  const simCompare = useMemo(() => {
+    if (line !== 'RFI' || heroPos === 'BB') return null;
+    try {
+      const sim = simRfiRange(heroPos, stackBB);
+      const simSet = new Set(sim.labels);
+      const chartSet = new Set(
+        [...strategy.hands.entries()].filter(([, f]) => (f.raise ?? 0) > 0.5).map(([l]) => l),
+      );
+      const union = new Set([...simSet, ...chartSet]);
+      let inter = 0;
+      for (const l of simSet) if (chartSet.has(l)) inter++;
+      const agree = union.size ? Math.round((inter / union.size) * 100) : 0;
+      const grid = new Map<string, number>();
+      for (const l of sim.labels) grid.set(l, 1);
+      const top = sim.labels.slice(0, 5).map((l) => `${l} (+${(sim.evOf(l) ?? 0).toFixed(2)}bb)`);
+      return { sim, grid, agree, top, chartCount: chartSet.size };
+    } catch {
+      return null;
+    }
+  }, [line, heroPos, stackBB, strategy]);
 
   const selFreqs = selected ? strategy.hands.get(selected) : undefined;
   const combos = selected ? labelToCombos(selected) : [];
@@ -386,6 +410,23 @@ export default function ChartsPage() {
             <p className="muted" style={{ marginTop: 10 }}>
               셀 색은 GTO 액션 비율(레이즈/콜/폴드 %)대로 칠해집니다. 핸드를 클릭하면 →
             </p>
+
+            {simCompare && (
+              <div style={{ marginTop: 18, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                  <h2 style={{ margin: 0, fontSize: 15 }}>🧪 자체 시뮬 오픈 레인지</h2>
+                  <span className="pill" style={{ background: 'rgba(88,166,255,0.14)', color: 'var(--blue)' }}>
+                    차트와 일치율 {simCompare.agree}%
+                  </span>
+                </div>
+                <p className="muted" style={{ margin: '6px 0 10px', fontSize: 12 }}>
+                  {heroPos} {simCompare.sim.stackBB}bb — 몬테카를로 칩EV 시뮬(핸드당 2만 회, 총 5,070만
+                  롤아웃)에서 EV&gt;0인 {simCompare.sim.labels.length}개 라벨. 상위:{' '}
+                  {simCompare.top.join(', ')}. 자세한 출처는 DATA_SOURCES.md 참고.
+                </p>
+                <RangeGrid range={simCompare.grid} />
+              </div>
+            )}
           </div>
 
           <div className="card">
