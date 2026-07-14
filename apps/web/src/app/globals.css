@@ -1273,3 +1273,17 @@ button.rp-quiz-toggle-on:hover {
     font-size: 12px;
   }
 }
+
+/* Node-lock paint grid (solver): red = force bet 100%, green = force check 100%. */
+.range-cell.lock-bet {
+  background: var(--danger);
+  color: #fff;
+}
+.range-cell.lock-check {
+  background: var(--accent);
+  color: #06210c;
+}
+.range-cell.lock-off {
+  opacity: 0.35;
+  cursor: default;
+}

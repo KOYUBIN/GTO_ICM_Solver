@@ -16,6 +16,7 @@ import {
   allGridLabels,
   POSITIONS_6MAX,
   availableVsRfi,
+  availableRfiVs3bet,
   type Position,
   type ActionLine,
   type PreflopAction,
@@ -32,6 +33,7 @@ const ACTION_COLORS = [
 const LINES: { value: ActionLine; label: string }[] = [
   { value: 'RFI', label: 'RFI (오픈)' },
   { value: 'vs-RFI', label: 'vs RFI (오픈 대응)' },
+  { value: 'RFI-vs-3bet', label: 'vs 3벳 (오픈 후 대응)' },
 ];
 
 type Tab = 'ev' | 'equity' | 'validate';
@@ -69,6 +71,8 @@ export default function ChartsPage() {
   const [recents, setRecents] = useState<RecentSpot[]>([]);
 
   const vsRfiPairs = useMemo(() => availableVsRfi(), []);
+  const rfiVs3betPairs = useMemo(() => availableRfiVs3bet(), []);
+  const needsVillain = line !== 'RFI';
 
   // Persist the viewed spot to localStorage (newest first, deduped, max 6).
   useEffect(() => {
@@ -102,7 +106,7 @@ export default function ChartsPage() {
         gameType: 'cash',
         stackBB,
         heroPos,
-        villainPos: line === 'vs-RFI' ? villainPos : undefined,
+        villainPos: line !== 'RFI' ? villainPos : undefined,
         line,
       }),
     [line, heroPos, villainPos, stackBB],
@@ -182,7 +186,12 @@ export default function ChartsPage() {
               style={{ padding: '4px 10px', fontSize: 13, borderRadius: 999 }}
               onClick={() => restoreSpot(r)}
             >
-              {r.line === 'vs-RFI' ? `${r.heroPos} vs ${r.villainPos}` : `${r.heroPos} RFI`} · {r.stackBB}bb
+              {r.line === 'vs-RFI'
+                ? `${r.heroPos} vs ${r.villainPos}`
+                : r.line === 'RFI-vs-3bet'
+                  ? `${r.heroPos} vs ${r.villainPos} 3벳`
+                  : `${r.heroPos} RFI`}{' '}
+              · {r.stackBB}bb
             </button>
           ))}
         </div>
@@ -205,7 +214,7 @@ export default function ChartsPage() {
           </div>
           {POSITIONS_6MAX.map((p) => {
             const isHero = p === heroPos;
-            const isVillain = line === 'vs-RFI' && p === villainPos;
+            const isVillain = needsVillain && p === villainPos;
             return (
               <div
                 key={p}
@@ -229,7 +238,15 @@ export default function ChartsPage() {
               >
                 <div>{p}</div>
                 <div style={{ fontSize: 11, color: 'var(--text-dim)' }}>
-                  {isHero ? (line === 'RFI' ? '오픈?' : '대응?') : isVillain ? '오프너' : `${stackBB}`}
+                  {isHero
+                    ? line === 'RFI'
+                      ? '오픈?'
+                      : '대응?'
+                    : isVillain
+                      ? line === 'RFI-vs-3bet'
+                        ? '3벳터'
+                        : '오프너'
+                      : `${stackBB}`}
                 </div>
               </div>
             );
@@ -246,9 +263,9 @@ export default function ChartsPage() {
               ))}
             </select>
           </div>
-          {line === 'vs-RFI' && (
+          {needsVillain && (
             <div>
-              <label>오프너 포지션</label>
+              <label>{line === 'RFI-vs-3bet' ? '3벳터 포지션' : '오프너 포지션'}</label>
               <select value={villainPos} onChange={(e) => setVillainPos(e.target.value as Position)}>
                 {POSITIONS_6MAX.map((p) => (
                   <option key={p} value={p}>
@@ -283,6 +300,24 @@ export default function ChartsPage() {
             />
           </div>
         </div>
+        {line === 'RFI-vs-3bet' && (
+          <div style={{ marginTop: 10 }}>
+            <span className="muted">차트 보유 매치업: </span>
+            {rfiVs3betPairs.map(({ hero, villain }) => (
+              <button
+                key={`${hero}_${villain}`}
+                className="secondary"
+                style={{ margin: '4px 4px 0 0', padding: '4px 10px', fontSize: 13 }}
+                onClick={() => {
+                  setHeroPos(hero);
+                  setVillainPos(villain);
+                }}
+              >
+                {hero} vs {villain} 3벳
+              </button>
+            ))}
+          </div>
+        )}
         {line === 'vs-RFI' && (
           <div style={{ marginTop: 10 }}>
             <span className="muted">차트 보유 매치업: </span>
@@ -343,6 +378,11 @@ export default function ChartsPage() {
               </div>
             </div>
             <ActionGrid data={gridData} colors={ACTION_COLORS} selected={selected} onSelect={setSelected} />
+            {line === 'RFI-vs-3bet' && (
+              <p className="muted" style={{ marginTop: 10, marginBottom: 0, fontSize: 12 }}>
+                4벳=레이즈 축
+              </p>
+            )}
             <p className="muted" style={{ marginTop: 10 }}>
               셀 색은 GTO 액션 비율(레이즈/콜/폴드 %)대로 칠해집니다. 핸드를 클릭하면 →
             </p>
