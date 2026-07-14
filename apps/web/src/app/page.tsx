@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { InstallButton } from '@/components/InstallButton';
 
 const FEATURES = [
   {
@@ -61,6 +62,9 @@ export default function Home() {
         GTO Wizard를 레퍼런스로 한 솔버 + 커뮤니티. 모든 계산은 웹·모바일 공용 엔진(@gto/engine)으로
         동작합니다.
       </p>
+      <div style={{ marginBottom: 18 }}>
+        <InstallButton />
+      </div>
       <div className="grid-cards">
         {FEATURES.map((f) => (
           <Link key={f.href} href={f.href} className="feature">
