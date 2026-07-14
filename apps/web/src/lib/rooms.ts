@@ -32,6 +32,39 @@ export interface RoomConfig {
   autoNextHand?: boolean;
   /** Allow busted players to rebuy back to the starting stack (cash-style). */
   allowRebuy?: boolean;
+  /** Show this table in the public lobby list (joinable without a code). */
+  isPublic?: boolean;
+}
+
+/** One table-chat message (bounded ring buffer on the room). */
+export interface ChatMsg {
+  id: string;
+  name: string;
+  text: string;
+  at: string; // ISO
+}
+
+/** Summary of a finished hand, kept on the room for the history panel. */
+export interface HandRecord {
+  handNumber: number;
+  board: string; // e.g. "Ks7h2cQd3s" ('' on a preflop fold-around)
+  pot: number;
+  winners: { name: string; amount: number; hand: string }[];
+  /** Hole cards revealed at showdown (empty on an uncontested win). */
+  revealed: { name: string; cards: string }[];
+  endedAt: string;
+}
+
+/** Sanitized lobby row for the public room list. */
+export interface PublicRoomSummary {
+  id: string;
+  name: string;
+  presetName: string;
+  smallBlind: number;
+  bigBlind: number;
+  players: number;
+  handNumber: number;
+  updatedAt: string;
 }
 
 export interface Room {
@@ -50,6 +83,10 @@ export interface Room {
   handEndedAt?: string;
   /** Ids of players who left; skipped on future deals. */
   left?: string[];
+  /** Table chat, newest last (capped server-side). */
+  chat?: ChatMsg[];
+  /** Finished-hand records, newest last (capped server-side). */
+  history?: HandRecord[];
   createdAt: string;
   updatedAt: string;
 }
@@ -167,6 +204,22 @@ export async function sendAction(
   });
   if (!res.ok) throw new Error((await safeErr(res)) || '액션 실패');
   return res.json();
+}
+
+export async function listPublicRooms(): Promise<PublicRoomSummary[]> {
+  const res = await fetch('/api/rooms', { cache: 'no-store' });
+  if (!res.ok) return [];
+  const j = await res.json();
+  return Array.isArray(j?.rooms) ? j.rooms : [];
+}
+
+export async function sendChat(id: string, playerId: string, text: string): Promise<void> {
+  const res = await fetch(`/api/rooms/${encodeURIComponent(id)}/chat`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ playerId, text }),
+  });
+  if (!res.ok) throw new Error((await safeErr(res)) || '메시지 전송 실패');
 }
 
 async function safeErr(res: Response): Promise<string> {

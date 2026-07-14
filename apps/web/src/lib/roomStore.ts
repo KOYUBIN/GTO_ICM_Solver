@@ -32,7 +32,8 @@ import {
   type Action,
   type BlindLevel,
 } from '@gto/engine';
-import type { Room, RoomConfig, RoomView, TournamentClock } from './rooms';
+import { cardsToString } from '@gto/engine';
+import type { Room, RoomConfig, RoomView, TournamentClock, ChatMsg, HandRecord, PublicRoomSummary } from './rooms';
 
 const usePg = HAS_PG;
 export const ROOM_STORE_BACKEND = usePg ? 'postgres' : 'file';
@@ -230,10 +231,35 @@ function tickAutoAdvance(room: Room): boolean {
   return true;
 }
 
+/** Append a finished hand to the room's history (idempotent per hand). */
+function recordHandIfEnded(room: Room): void {
+  const st = room.gameState;
+  if (!st || st.handInProgress || !st.winners.length) return;
+  const hist: HandRecord[] = (room.history ??= []);
+  if (hist.length && hist[hist.length - 1].handNumber === st.handNumber) return;
+  const uncontested = st.winners.some((w) => w.hand === 'uncontested');
+  const nameOf = (id: string) => st.seats.find((s) => s.id === id)?.name ?? '?';
+  hist.push({
+    handNumber: st.handNumber,
+    board: cardsToString(st.board),
+    pot: st.winners.reduce((a, w) => a + w.amount, 0),
+    winners: st.winners.map((w) => ({ name: nameOf(w.seatId), amount: w.amount, hand: w.hand })),
+    // Hole cards only from a real showdown — never leak an uncontested winner's.
+    revealed: uncontested
+      ? []
+      : st.seats
+          .filter((s) => (s.status === 'active' || s.status === 'allin') && s.holeCards.length === 2)
+          .map((s) => ({ name: s.name, cards: cardsToString(s.holeCards) })),
+    endedAt: new Date().toISOString(),
+  });
+  if (hist.length > 20) hist.splice(0, hist.length - 20);
+}
+
 /** Load a room and apply any due timeouts / auto-advance, persisting changes. */
 export async function tickAndGet(id: string): Promise<Room | undefined> {
   const room = await getRoom(id);
   if (!room) return undefined;
+  const expected = room.updatedAt;
   let changed = tickTimeouts(room);
   // Mark a freshly-ended hand even if no timeout fired.
   const st = room.gameState;
@@ -243,9 +269,14 @@ export async function tickAndGet(id: string): Promise<Room | undefined> {
     changed = true;
   }
   if (tickAutoAdvance(room)) changed = true;
+  const before = room.history?.length ?? 0;
+  recordHandIfEnded(room);
+  if ((room.history?.length ?? 0) !== before) changed = true;
   if (changed) {
     room.updatedAt = new Date().toISOString();
-    await persist(room);
+    // Best-effort: if another instance ticked first, its write wins and the
+    // next poll re-reads fresh state.
+    await persist(room, expected).catch(() => {});
   }
   return room;
 }
@@ -374,8 +405,18 @@ async function pgGet(id: string): Promise<Room | undefined> {
   return rows[0]?.data as Room | undefined;
 }
 
-async function pgPut(room: Room): Promise<void> {
+async function pgPut(room: Room, expected?: string): Promise<void> {
   await pgEnsure();
+  if (expected) {
+    // Optimistic concurrency: only write if nobody else wrote since we read.
+    const res = await pg().sql`UPDATE rooms
+      SET updated_at = ${room.updatedAt}, data = ${JSON.stringify(room)}::jsonb
+      WHERE id = ${room.id} AND updated_at = ${expected}`;
+    if (res.rowCount === 0) {
+      throw new Error('다른 요청과 동시에 처리되어 반영되지 않았습니다. 잠시 후 다시 시도하세요.');
+    }
+    return;
+  }
   await pg().sql`INSERT INTO rooms (id, created_at, updated_at, data)
     VALUES (${room.id}, ${room.createdAt}, ${room.updatedAt}, ${JSON.stringify(room)}::jsonb)
     ON CONFLICT (id) DO UPDATE SET updated_at = ${room.updatedAt}, data = ${JSON.stringify(room)}::jsonb`;
@@ -423,9 +464,10 @@ export async function joinRoom(
   const code = id.toUpperCase();
   const room = await getRoom(code);
   if (!room) return null;
+  const expected = room.updatedAt;
   const playerId = addPlayer(room, name);
   if (!playerId) return null;
-  await persist(room);
+  await persist(room, expected);
   return { room, playerId };
 }
 
@@ -435,8 +477,9 @@ export async function startNextHand(id: string, playerId: string): Promise<Room>
   if (!room) throw new Error('방을 찾을 수 없습니다.');
   if (room.hostId !== playerId) throw new Error('호스트만 딜할 수 있습니다.');
   if (room.players.length < 2) throw new Error('플레이어가 2명 이상이어야 합니다.');
+  const expected = room.updatedAt;
   dealNext(room);
-  await persist(room);
+  await persist(room, expected);
   return room;
 }
 
@@ -452,6 +495,7 @@ export async function rebuyPlayer(id: string, playerId: string): Promise<Room | 
   if (!seat) throw new Error('좌석을 찾을 수 없습니다.');
   if (seat.stack > 0) throw new Error('아직 칩이 남아 있어 리바이할 수 없습니다.');
 
+  const expected = room.updatedAt;
   const live = room.gameState.handInProgress;
   room.gameState = {
     ...room.gameState,
@@ -462,7 +506,7 @@ export async function rebuyPlayer(id: string, playerId: string): Promise<Room | 
     ),
   };
   room.updatedAt = new Date().toISOString();
-  await persist(room);
+  await persist(room, expected);
   return room;
 }
 
@@ -470,6 +514,7 @@ export async function leaveRoom(id: string, playerId: string): Promise<Room | un
   const code = id.toUpperCase();
   const room = await getRoom(code);
   if (!room) return undefined;
+  const expected = room.updatedAt;
   room.players = room.players.filter((p) => p.id !== playerId);
   room.left = room.left ?? [];
   if (!room.left.includes(playerId)) room.left.push(playerId);
@@ -489,8 +534,9 @@ export async function leaveRoom(id: string, playerId: string): Promise<Room | un
   }
   // Hand the host role to whoever remains.
   if (room.hostId === playerId && room.players.length) room.hostId = room.players[0].id;
+  recordHandIfEnded(room);
   room.updatedAt = new Date().toISOString();
-  await persist(room);
+  await persist(room, expected);
   return room;
 }
 
@@ -498,17 +544,78 @@ export async function doAction(id: string, playerId: string, action: Action): Pr
   const code = id.toUpperCase();
   const room = await getRoom(code);
   if (!room) throw new Error('방을 찾을 수 없습니다.');
+  const expected = room.updatedAt;
   applyRoomAction(room, playerId, action);
-  await persist(room);
+  recordHandIfEnded(room);
+  await persist(room, expected);
   return room;
 }
 
-async function persist(room: Room): Promise<void> {
+async function persist(room: Room, expected?: string): Promise<void> {
   if (usePg) {
-    await pgPut(room);
+    await pgPut(room, expected);
   } else {
+    // Single-instance file/memory backend: writes are already serialized.
     const db = await fileRead();
     db[room.id] = room;
     await fileWrite(db);
   }
+}
+
+async function deleteRoom(id: string): Promise<void> {
+  if (usePg) {
+    await pgEnsure();
+    await pg().sql`DELETE FROM rooms WHERE id = ${id}`;
+    return;
+  }
+  const db = await fileRead();
+  delete db[id];
+  await fileWrite(db);
+}
+
+const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Public lobby rows (sanitized), lazily deleting rooms idle for 24h+. */
+export async function listPublicRooms(): Promise<PublicRoomSummary[]> {
+  const all = await listRooms();
+  const now = Date.now();
+  const fresh: Room[] = [];
+  for (const r of all) {
+    if (now - new Date(r.updatedAt).getTime() > ROOM_TTL_MS) {
+      await deleteRoom(r.id).catch(() => {});
+    } else {
+      fresh.push(r);
+    }
+  }
+  return fresh
+    .filter((r) => r.config.isPublic && r.players.length > 0)
+    .slice(0, 30)
+    .map((r) => ({
+      id: r.id,
+      name: r.name,
+      presetName: r.config.presetName,
+      smallBlind: r.gameState?.smallBlind ?? r.config.smallBlind,
+      bigBlind: r.gameState?.bigBlind ?? r.config.bigBlind,
+      players: r.players.length,
+      handNumber: r.gameState?.handNumber ?? 0,
+      updatedAt: r.updatedAt,
+    }));
+}
+
+/** Append a table-chat message (members only, bounded to the last 60). */
+export async function addChat(id: string, playerId: string, text: string): Promise<Room> {
+  const code = id.toUpperCase();
+  const room = await getRoom(code);
+  if (!room) throw new Error('방을 찾을 수 없습니다.');
+  const player = room.players.find((p) => p.id === playerId);
+  if (!player) throw new Error('테이블에 없는 플레이어입니다.');
+  const t = text.trim().slice(0, 200);
+  if (!t) throw new Error('빈 메시지입니다.');
+  const expected = room.updatedAt;
+  const chat: ChatMsg[] = (room.chat ??= []);
+  chat.push({ id: genId('m'), name: player.name, text: t, at: new Date().toISOString() });
+  if (chat.length > 60) chat.splice(0, chat.length - 60);
+  room.updatedAt = new Date().toISOString();
+  await persist(room, expected);
+  return room;
 }
