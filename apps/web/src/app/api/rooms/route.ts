@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createRoom } from '@/lib/roomStore';
+import { createRoom, listPublicRooms } from '@/lib/roomStore';
 import type { RoomConfig } from '@/lib/rooms';
 
 export const runtime = 'nodejs';
@@ -28,6 +28,7 @@ export async function POST(req: NextRequest) {
     actionTimeoutSec: Math.min(120, num(c.actionTimeoutSec, 30)),
     autoNextHand: c.autoNextHand !== false,
     allowRebuy: c.allowRebuy !== false,
+    isPublic: c.isPublic === true,
     levels: sanitizeLevels(c.levels),
   };
   if (config.bigBlind <= 0 || config.startingStack < config.bigBlind) {
@@ -40,6 +41,16 @@ export async function POST(req: NextRequest) {
     config,
   );
   return NextResponse.json({ room, playerId }, { status: 201 });
+}
+
+// GET /api/rooms -> public lobby list (sanitized summaries only).
+export async function GET() {
+  try {
+    const rooms = await listPublicRooms();
+    return NextResponse.json({ rooms });
+  } catch (e) {
+    return NextResponse.json({ rooms: [], error: (e as Error).message }, { status: 200 });
+  }
 }
 
 function num(v: unknown, fallback: number): number {

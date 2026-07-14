@@ -10,8 +10,10 @@ import {
   sendAction,
   leaveRoom as leaveRoomReq,
   rebuy as rebuyReq,
+  listPublicRooms,
   type RoomView,
   type RoomConfig,
+  type PublicRoomSummary,
 } from '@/lib/rooms';
 import { PRESET_LIST, getPreset, type BlindPreset } from '@gto/engine';
 import type { Action } from '@gto/engine';
@@ -205,6 +207,8 @@ function Landing({
   // Optional extra blind levels (level 1 is the sb/bb/ante above).
   const [extraLevels, setExtraLevels] = useState<{ smallBlind: number; bigBlind: number; ante: number }[]>([]);
   const [joinCode, setJoinCode] = useState('');
+  const [isPublic, setIsPublic] = useState(true);
+  const [lobby, setLobby] = useState<PublicRoomSummary[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   // 'file' backend on a serverless deploy means rooms don't persist across
@@ -217,6 +221,18 @@ function Landing({
       .then((r) => r.json())
       .then((d) => setRoomBackend(d.roomBackend ?? null))
       .catch(() => {});
+  }, []);
+
+  // Refresh the public lobby list while on the landing page.
+  useEffect(() => {
+    let alive = true;
+    const load = () => listPublicRooms().then((r) => alive && setLobby(r)).catch(() => {});
+    load();
+    const t = setInterval(load, 5000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
   }, []);
 
   function addLevel() {
@@ -253,6 +269,7 @@ function Landing({
       return {
         presetId: 'custom',
         presetName: '커스텀',
+        isPublic,
         startingStack: custom.startingStack,
         smallBlind: custom.smallBlind,
         bigBlind: custom.bigBlind,
@@ -264,7 +281,7 @@ function Landing({
         levels,
       };
     }
-    return presetToConfig(getPreset(presetId));
+    return { ...presetToConfig(getPreset(presetId)), isPublic };
   }
 
   async function onCreate() {
@@ -281,6 +298,24 @@ function Landing({
         hostName: name.trim(),
         config: buildConfig(),
       });
+      onEnter(room.id, playerId, name.trim());
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function joinById(id: string) {
+    if (!name.trim()) {
+      setError('이름을 입력하세요.');
+      nameRef.current?.focus();
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      const { room, playerId } = await joinRoom(id, name.trim());
       onEnter(room.id, playerId, name.trim());
     } catch (e) {
       setError((e as Error).message);
@@ -348,6 +383,50 @@ function Landing({
           placeholder="예: 철수"
           onChange={(e) => setName(e.target.value)}
         />
+      </div>
+
+      <div className="card">
+        <h2>🌐 공개 테이블 ({lobby?.length ?? 0})</h2>
+        {lobby === null ? (
+          <p className="muted">목록 불러오는 중…</p>
+        ) : lobby.length === 0 ? (
+          <p className="muted">지금 열려 있는 공개 테이블이 없습니다. 첫 테이블을 만들어 보세요!</p>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {lobby.map((r) => (
+              <div
+                key={r.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  flexWrap: 'wrap',
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 140 }}>
+                  <strong>{r.name}</strong>
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    {r.presetName} · {r.smallBlind}/{r.bigBlind} · {r.players}명
+                    {r.handNumber > 0 ? ` · 핸드 #${r.handNumber}` : ' · 대기 중'}
+                  </div>
+                </div>
+                <button onClick={() => joinById(r.id)} disabled={busy} style={{ padding: '8px 16px' }}>
+                  참가
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() => onSpectate(r.id)}
+                  style={{ padding: '8px 12px' }}
+                >
+                  관전
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="card">
@@ -535,7 +614,18 @@ function Landing({
           </div>
         )}
 
-        <div style={{ marginTop: 18 }}>
+        <div style={{ marginTop: 14 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={isPublic}
+              onChange={(e) => setIsPublic(e.target.checked)}
+              style={{ width: 'auto' }}
+            />
+            공개 테이블 목록에 표시 (끄면 코드로만 참가 가능)
+          </label>
+        </div>
+        <div style={{ marginTop: 14 }}>
           <button onClick={onCreate} disabled={busy}>
             {busy ? '생성 중…' : '방 만들기'}
           </button>

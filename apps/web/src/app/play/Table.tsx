@@ -9,7 +9,7 @@ import {
   type Action,
   type Seat,
 } from '@gto/engine';
-import type { RoomView } from '@/lib/rooms';
+import { sendChat, type RoomView } from '@/lib/rooms';
 import { sfx, primeAudio } from './sounds';
 import { HandResult } from './HandResult';
 
@@ -223,9 +223,149 @@ export function Table({
               onDeal={onDeal}
             />
           )}
+          <ChatPanel room={room} youId={youId} />
+          <HandHistory room={room} />
           <HandLog log={state.log} />
         </>
       )}
+    </div>
+  );
+}
+
+// ---------- table chat ----------
+
+const QUICK_EMOTES = ['👍', '😂', '😭', '🔥', '🙏', 'GG', '나이스핸드', 'ㅋㅋㅋ'];
+
+function ChatPanel({ room, youId }: { room: RoomView; youId: string | null }) {
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const listRef = useRef<HTMLDivElement>(null);
+  const msgs = room.chat ?? [];
+
+  // Keep the newest message in view.
+  useEffect(() => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [msgs.length]);
+
+  async function send(t: string) {
+    if (!youId || !t.trim() || busy) return;
+    setBusy(true);
+    setErr('');
+    try {
+      await sendChat(room.id, youId, t);
+      setText('');
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card">
+      <h2>💬 채팅</h2>
+      <div
+        ref={listRef}
+        style={{ maxHeight: 160, overflowY: 'auto', fontSize: 13, lineHeight: 1.7, marginBottom: 10 }}
+      >
+        {msgs.length === 0 && <span className="muted">아직 메시지가 없습니다.</span>}
+        {msgs.map((m) => (
+          <div key={m.id}>
+            <strong style={{ color: 'var(--blue)' }}>{m.name}</strong>{' '}
+            <span>{m.text}</span>
+          </div>
+        ))}
+      </div>
+      {youId ? (
+        <>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+            {QUICK_EMOTES.map((e) => (
+              <button
+                key={e}
+                className="secondary"
+                onClick={() => send(e)}
+                disabled={busy}
+                style={{ padding: '4px 10px', fontSize: 14 }}
+              >
+                {e}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              type="text"
+              value={text}
+              maxLength={200}
+              placeholder="메시지 입력…"
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') send(text);
+              }}
+            />
+            <button onClick={() => send(text)} disabled={busy || !text.trim()} style={{ flex: '0 0 auto' }}>
+              전송
+            </button>
+          </div>
+          {err && (
+            <p className="muted" style={{ color: 'var(--danger)', marginTop: 6, fontSize: 12 }}>
+              {err}
+            </p>
+          )}
+        </>
+      ) : (
+        <p className="muted" style={{ margin: 0, fontSize: 12 }}>관전 중에는 채팅을 읽을 수만 있습니다.</p>
+      )}
+    </div>
+  );
+}
+
+// ---------- hand history ----------
+
+function HandHistory({ room }: { room: RoomView }) {
+  const hist = room.history ?? [];
+  if (!hist.length) return null;
+  return (
+    <div className="card">
+      <h2>🕘 지난 핸드</h2>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 240, overflowY: 'auto' }}>
+        {[...hist].reverse().map((h) => (
+          <div
+            key={h.handNumber}
+            style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '8px 12px', fontSize: 13 }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
+              <span>
+                <strong>#{h.handNumber}</strong>{' '}
+                {h.winners.map((w) => `${w.name} +${w.amount.toLocaleString()}`).join(' · ')}
+                <span className="muted"> ({h.winners[0]?.hand === 'uncontested' ? '폴드 승' : h.winners[0]?.hand})</span>
+              </span>
+              <span className="muted">팟 {h.pot.toLocaleString()}</span>
+            </div>
+            {h.board && (
+              <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ display: 'flex', gap: 3 }}>
+                  {(h.board.match(/.{2}/g) ?? []).map((cs, i) => {
+                    const red = cs[1] === 'h' || cs[1] === 'd';
+                    return (
+                      <span key={i} className={`playing-card${red ? ' red' : ''}`} style={{ width: 24, height: 34, fontSize: 12 }}>
+                        {cs[0].toUpperCase()}
+                        {SUIT_GLYPH[cs[1]]}
+                      </span>
+                    );
+                  })}
+                </span>
+                {h.revealed.length >= 2 && (
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    쇼다운: {h.revealed.map((r) => `${r.name} ${r.cards}`).join(' vs ')}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
