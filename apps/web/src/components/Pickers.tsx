@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef } from 'react';
-import { allGridLabels } from '@gto/engine';
+import { allGridLabels, parseRange } from '@gto/engine';
 
 const RANKS = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
 const SUITS: { s: string; glyph: string }[] = [
@@ -97,12 +97,24 @@ export const RANGE_PRESETS: { label: string; value: string }[] = [
  */
 export function HandGridPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const labels = allGridLabels();
-  const selected = new Set(
-    value
-      .split(',')
-      .map((t) => t.trim())
-      .filter((t) => /^[2-9TJQKA]{2}[so]?$/.test(t)),
-  );
+  // Expand full range NOTATION ("22+", "A5s-A2s", "AKs:0.5") into grid labels
+  // via the engine parser, so presets and typed ranges light up the grid.
+  // Fall back to bare-label filtering if the text doesn't parse mid-edit.
+  let selected: Set<string>;
+  try {
+    selected = value.trim()
+      ? new Set(
+          [...parseRange(value).entries()].filter(([, w]) => w > 0).map(([label]) => label),
+        )
+      : new Set<string>();
+  } catch {
+    selected = new Set(
+      value
+        .split(',')
+        .map((t) => t.trim())
+        .filter((t) => /^[2-9TJQKA]{2}[so]?$/.test(t)),
+    );
+  }
   // Drag-to-paint: pointerdown decides paint mode (add/remove from the first
   // cell), pointermove paints every cell under the finger/cursor. Works on
   // touch via elementFromPoint since a single touch gesture stays on the
