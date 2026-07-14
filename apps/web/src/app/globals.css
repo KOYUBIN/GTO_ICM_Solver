@@ -958,3 +958,318 @@ a.btn-link:hover {
   aspect-ratio: 3 / 4.1;
   font-size: clamp(9px, 2.6vw, 13px);
 }
+
+/* ---- hand replay stage (/replay): WPL-broadcast-style step-through ---- */
+.replay-stage {
+  position: relative;
+  border-radius: 18px;
+  background: radial-gradient(ellipse at 50% 28%, #17663a 0%, #0f4527 55%, #0b3119 100%);
+  border: 3px solid #0a2416;
+  box-shadow: inset 0 0 46px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.35);
+  padding: 18px 14px 16px;
+}
+.rp-players {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px 14px;
+  margin-top: 6px;
+}
+.rp-pod {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 128px;
+  padding: 10px 12px 8px;
+  border-radius: 12px;
+  background: rgba(6, 20, 12, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  transition: border-color 0.25s, box-shadow 0.25s;
+}
+.rp-pod.rp-win {
+  border-color: var(--warn);
+  animation: winnerGlow 1.1s ease-in-out infinite;
+}
+.rp-crown {
+  position: absolute;
+  top: -16px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 20px;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.6));
+}
+.rp-pod-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rp-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 16px;
+  color: #fff;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+  flex: 0 0 auto;
+}
+.rp-cards {
+  display: flex;
+  gap: 3px;
+}
+.rp-cards .playing-card {
+  margin-right: 0;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+.rp-plate {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  background: rgba(8, 14, 10, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  padding: 2px 10px;
+  max-width: 100%;
+}
+.rp-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rp-pos {
+  font-size: 11px;
+  color: #9fc3ad;
+}
+.rp-eq {
+  display: flex;
+  align-items: center;
+  font-size: 16px;
+  font-weight: 800;
+  color: #e6f3ea;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  transition: color 0.25s;
+}
+.rp-eq.rp-lead {
+  color: var(--accent);
+}
+.rp-board {
+  text-align: center;
+  margin-top: 16px;
+}
+.rp-board-cards {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  align-items: center;
+  min-height: 53px;
+}
+.rp-slot {
+  display: inline-flex;
+  width: 38px;
+  height: 53px;
+  border-radius: 6px;
+  border: 1px dashed rgba(255, 255, 255, 0.28);
+  background: rgba(0, 0, 0, 0.18);
+}
+.rp-noboard {
+  font-size: 13px;
+  color: #cfe8d8;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+.rp-badbeat {
+  width: fit-content;
+  margin: 12px auto 0;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffd977;
+  background: rgba(120, 63, 4, 0.45);
+  border: 1px solid rgba(210, 153, 34, 0.55);
+  animation: dealIn 0.28s ease-out both;
+}
+.rp-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 14px;
+}
+.rp-controls button {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+.rp-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+  margin-top: 8px;
+}
+.rp-tab {
+  padding: 4px 12px;
+  font-size: 12px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+.rp-tab:hover {
+  background: var(--bg-card);
+  color: var(--text);
+}
+.rp-tab-on,
+.rp-tab-on:hover {
+  background: var(--accent);
+  color: #0d1117;
+  border-color: var(--accent);
+  font-weight: 700;
+}
+.rp-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.rp-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+@media (max-width: 640px) {
+  .replay-stage {
+    padding: 14px 8px 12px;
+  }
+  .rp-pod {
+    min-width: 104px;
+    padding: 8px 8px 6px;
+  }
+  .rp-name {
+    max-width: 84px;
+  }
+  .rp-eq {
+    font-size: 14px;
+  }
+}
+
+/* ---- replay quiz mode (🎯 퀴즈 모드) ---- */
+.rp-eq-hidden {
+  font-size: 15px;
+  cursor: help;
+}
+.rp-quiz {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  animation: dealIn 0.28s ease-out both;
+}
+.rp-quiz-title {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.rp-quiz-q {
+  font-size: 13px;
+  margin: 10px 0 8px;
+}
+.rp-quiz-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.rp-quiz-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+button.rp-quiz-opt-on,
+button.rp-quiz-opt-on:hover {
+  border-color: var(--accent);
+  background: rgba(63, 185, 80, 0.14);
+  color: var(--text);
+}
+.rp-quiz-fb {
+  font-size: 13px;
+  margin-top: 6px;
+  line-height: 1.6;
+}
+button.rp-quiz-toggle-on,
+button.rp-quiz-toggle-on:hover {
+  border-color: var(--accent);
+  background: rgba(63, 185, 80, 0.14);
+  color: var(--accent);
+}
+.rp-score {
+  margin-top: 14px;
+  padding: 16px;
+  text-align: center;
+  border: 1px solid rgba(210, 153, 34, 0.55);
+  border-radius: 12px;
+  background: rgba(210, 153, 34, 0.08);
+  animation: dealIn 0.28s ease-out both;
+}
+.rp-score-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+.rp-grade {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-weight: 800;
+  font-size: 17px;
+  color: #0d1117;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+.rp-grade-s {
+  background: var(--warn);
+  animation: winnerGlow 1.1s ease-in-out infinite;
+}
+.rp-grade-a {
+  background: var(--accent);
+}
+.rp-grade-b {
+  background: var(--blue);
+}
+.rp-grade-c {
+  background: var(--text-dim);
+}
+@media (max-width: 640px) {
+  .rp-quiz {
+    padding: 12px 10px;
+  }
+  .rp-quiz-opt {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+}

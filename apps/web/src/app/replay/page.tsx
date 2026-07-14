@@ -7,6 +7,7 @@ import { BoardPicker } from '@/components/Pickers';
 
 const POSITIONS = ['UTG', 'UTG1', 'MP', 'LJ', 'HJ', 'CO', 'BTN', 'SB', 'BB'];
 const STREET_KO: Record<string, string> = { preflop: '프리플랍', flop: '플랍', turn: '턴', river: '리버' };
+const SUIT_GLYPH: Record<string, string> = { c: '♣', d: '♦', h: '♥', s: '♠' };
 
 interface Player {
   name: string;
@@ -126,10 +127,6 @@ export default function ReplayPage() {
       }
     }, 10);
   }
-
-  const finalEq = result?.rows[result.rows.length - 1]?.equities ?? [];
-  const winnerIdx = finalEq.length ? finalEq.indexOf(Math.max(...finalEq)) : -1;
-  const preEq = result?.rows.find((r) => r.street === 'preflop')?.equities;
 
   return (
     <div className="container" style={{ maxWidth: 980 }}>
@@ -260,90 +257,581 @@ export default function ReplayPage() {
       </div>
 
       {result && (
-        <div className="card">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
-            <h2 style={{ margin: 0, fontSize: 17 }}>{title || '핸드'}</h2>
-            {pot.trim() && <span className="muted">팟 {Number(pot).toLocaleString()}</span>}
-          </div>
-          {result.board && (
-            <div style={{ marginBottom: 12 }}>
-              <PlayingCards cards={result.board} />
-            </div>
-          )}
-
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
-              <thead>
-                <tr style={{ color: 'var(--text-dim)', textAlign: 'right' }}>
-                  <th style={{ textAlign: 'left', padding: '6px 8px' }}>플레이어</th>
-                  {result.rows.map((r) => (
-                    <th key={r.cards} style={{ padding: '6px 8px' }}>
-                      {STREET_KO[r.street]}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {result.players.map((p, pi) => {
-                  const isWinner = pi === winnerIdx;
-                  return (
-                    <tr
-                      key={pi}
-                      style={{
-                        borderTop: '1px solid var(--border)',
-                        background: isWinner ? 'rgba(63,185,80,0.08)' : undefined,
-                      }}
-                    >
-                      <td style={{ padding: '8px', textAlign: 'left' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <span style={{ minWidth: 70 }}>
-                            <strong>{p.name || `P${pi + 1}`}</strong>
-                            <span className="muted" style={{ marginLeft: 6, fontSize: 12 }}>
-                              {p.pos}
-                            </span>
-                          </span>
-                          <PlayingCards cards={p.cards} />
-                          {isWinner && (
-                            <span className="pill push" style={{ marginLeft: 4 }}>
-                              승
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      {result.rows.map((r) => {
-                        const eq = r.equities[pi];
-                        const best = eq === Math.max(...r.equities);
-                        return (
-                          <td
-                            key={r.cards}
-                            style={{
-                              padding: '8px',
-                              textAlign: 'right',
-                              fontVariantNumeric: 'tabular-nums',
-                              fontWeight: best ? 700 : 400,
-                              color: best ? 'var(--accent)' : 'var(--text)',
-                            }}
-                          >
-                            {(eq * 100).toFixed(1)}%
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          {preEq && winnerIdx >= 0 && (
-            <p className="muted" style={{ marginTop: 12, fontSize: 13 }}>
-              올인 시점(프리플랍) 에쿼티 — {result.players.map((p, i) => `${p.name || `P${i + 1}`} ${(preEq[i] * 100).toFixed(1)}%`).join(' · ')}.
-              {' '}최종 승자: <strong style={{ color: 'var(--accent)' }}>{result.players[winnerIdx].name || `P${winnerIdx + 1}`}</strong>
-              {preEq[winnerIdx] < 0.5 ? ' (언더독 역전 — 배드빗)' : ''}.
-            </p>
-          )}
-        </div>
+        <ReplayStage rows={result.rows} players={result.players} board={result.board} title={title} pot={pot} />
       )}
     </div>
+  );
+}
+
+// ---------- WPL-broadcast-style replay stage ----------
+
+const AVATAR_PALETTE = ['#7c5cff', '#0ea5e9', '#f97316', '#ec4899', '#14b8a6', '#eab308', '#8b5cf6', '#22c55e', '#ef4444'];
+
+/** Name-hash palette index (same scheme as the play table's avatarColor). */
+function avatarHash(name: string): number {
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return h % AVATAR_PALETTE.length;
+}
+
+/** One color per player: name-hash first, then walk the palette so lines stay distinguishable. */
+function playerColors(names: string[]): string[] {
+  const used = new Set<number>();
+  return names.map((n) => {
+    let idx = avatarHash(n);
+    while (used.has(idx) && used.size < AVATAR_PALETTE.length) idx = (idx + 1) % AVATAR_PALETTE.length;
+    used.add(idx);
+    return AVATAR_PALETTE[idx];
+  });
+}
+
+/** One answered quiz step: Q1 leader pick + Q2 equity guess for the first player. */
+interface QuizAnswer {
+  pick: number; // Q1: chosen player index
+  guess: number; // Q2: guessed equity % for players[0]
+  q1Correct: boolean;
+  err: number; // |guess - actual| in %p
+}
+
+/** A single card like "Ks" with the 4-color suit classes; `deal` animates it in. */
+function CardSpan({ cs, w = 32, deal = false }: { cs: string; w?: number; deal?: boolean }) {
+  const suit = (cs[1] ?? '').toLowerCase();
+  return (
+    <span
+      className={`playing-card suit-${suit}${deal ? ' card-deal' : ''}`}
+      style={{ width: w, height: Math.round(w * 1.4), fontSize: Math.round(w * 0.48), marginRight: 0 }}
+    >
+      {(cs[0] ?? '').toUpperCase()}
+      {SUIT_GLYPH[suit] ?? suit}
+    </span>
+  );
+}
+
+function ReplayStage({
+  rows,
+  players,
+  board,
+  title,
+  pot,
+}: {
+  rows: StreetEquity[];
+  players: Player[];
+  board: string;
+  title: string;
+  pot: string;
+}) {
+  const [step, setStep] = useState(0);
+  const [auto, setAuto] = useState(false);
+  // Quiz mode (GTO-트레이너 스타일): per-step answers keyed by step index.
+  const [quizOn, setQuizOn] = useState(false);
+  const [answers, setAnswers] = useState<Record<number, QuizAnswer>>({});
+  const [pick, setPick] = useState<number | null>(null); // Q1: chosen player for the pending step
+  const [guess, setGuess] = useState(50); // Q2: equity slider (0-100)
+  const last = rows.length - 1;
+
+  // New analysis -> rewind to the first street, stop auto-play, clear the quiz.
+  useEffect(() => {
+    setStep(0);
+    setAuto(false);
+    setQuizOn(false);
+    setAnswers({});
+  }, [rows]);
+
+  // Each step gets fresh quiz inputs.
+  useEffect(() => {
+    setPick(null);
+    setGuess(50);
+  }, [step]);
+
+  // Auto-play: advance one street every 1.2s; cleared on unmount, stopped at the end.
+  useEffect(() => {
+    if (!auto) return;
+    const t = setInterval(() => setStep((s) => Math.min(s + 1, last)), 1200);
+    return () => clearInterval(t);
+  }, [auto, last]);
+  useEffect(() => {
+    if (auto && step >= last) setAuto(false);
+  }, [auto, step, last]);
+
+  function go(i: number) {
+    setAuto(false);
+    setStep(Math.max(0, Math.min(last, i)));
+  }
+  function toggleAuto() {
+    if (auto) {
+      setAuto(false);
+      return;
+    }
+    if (step >= last) setStep(0);
+    setAuto(true);
+  }
+
+  const cur = Math.min(step, last);
+  const row = rows[cur];
+  const atEnd = cur === last;
+  const maxEq = Math.max(...row.equities);
+  const finalEq = rows[last].equities;
+  const winnerIdx = finalEq.indexOf(Math.max(...finalEq));
+  const preEq = rows[0].equities;
+  const preFavIdx = preEq.indexOf(Math.max(...preEq));
+  const badBeat = rows.length > 1 && winnerIdx >= 0 && winnerIdx !== preFavIdx;
+  const winnerName = players[winnerIdx]?.name || `P${winnerIdx + 1}`;
+  const colors = playerColors(players.map((p, i) => p.name || `P${i + 1}`));
+  const boardCards = board.match(/.{2}/g) ?? [];
+  const potNum = Number(pot.replace(/[,\s]/g, ''));
+  const potLabel = pot.trim() ? (Number.isFinite(potNum) ? potNum.toLocaleString() : pot) : '';
+
+  // ---- quiz mode derived state ----
+  const curAns = answers[cur];
+  const quizPending = quizOn && !curAns; // current step not answered -> hide equities, ask
+  const revealCur = !quizOn || !!curAns;
+  const finalRevealed = !quizOn || answers[last] !== undefined;
+  const answeredCount = Object.keys(answers).length;
+  const allAnswered = answeredCount >= rows.length;
+  const q1Count = Object.values(answers).filter((a) => a.q1Correct).length;
+  const avgErr = answeredCount ? Object.values(answers).reduce((s, a) => s + a.err, 0) / answeredCount : 0;
+  const grade: 'S' | 'A' | 'B' | 'C' =
+    allAnswered && q1Count === rows.length && avgErr <= 5 ? 'S' : avgErr <= 10 ? 'A' : avgErr <= 18 ? 'B' : 'C';
+  const leaderIdx = row.equities.indexOf(maxEq);
+  const scoreVisible = quizOn && answers[last] !== undefined;
+
+  function toggleQuiz() {
+    if (quizOn) {
+      setQuizOn(false);
+      return;
+    }
+    // Turning on starts a fresh quiz and pauses auto-play.
+    setAuto(false);
+    setAnswers({});
+    setPick(null);
+    setGuess(50);
+    setQuizOn(true);
+  }
+  function confirmQuiz() {
+    if (pick === null) return;
+    const err = Math.abs(guess - (row.equities[0] ?? 0) * 100);
+    setAnswers((prev) => ({
+      ...prev,
+      [cur]: { pick, guess, q1Correct: (row.equities[pick] ?? 0) === maxEq, err },
+    }));
+  }
+  function retryQuiz() {
+    setAnswers({});
+    setPick(null);
+    setGuess(50);
+    go(0);
+  }
+
+  return (
+    <>
+      <div className="card">
+        <div
+          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10, gap: 8, flexWrap: 'wrap' }}
+        >
+          <h2 style={{ margin: 0, fontSize: 17 }}>{title || '핸드'}</h2>
+          <span className="muted">
+            {STREET_KO[row.street]} · {cur + 1}/{rows.length}
+          </span>
+        </div>
+
+        <div className="replay-stage">
+          {/* Players around/above the board */}
+          <div className="rp-players">
+            {players.map((p, pi) => {
+              const name = p.name || `P${pi + 1}`;
+              const eq = row.equities[pi] ?? 0;
+              const isLead = eq === maxEq && revealCur;
+              const isWin = atEnd && pi === winnerIdx && revealCur;
+              const hole = p.cards.replace(/\s+/g, '').match(/.{2}/g) ?? [];
+              return (
+                <div key={pi} className={`rp-pod${isWin ? ' rp-win' : ''}`}>
+                  {isWin && <div className="rp-crown">👑</div>}
+                  <div className="rp-pod-top">
+                    <div className="rp-avatar" style={{ background: colors[pi] }}>
+                      {name.slice(0, 1).toUpperCase()}
+                    </div>
+                    <div className="rp-cards">
+                      {hole.map((cs, ci) => (
+                        <CardSpan key={ci} cs={cs} />
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rp-plate">
+                    <span className="rp-name">{name}</span>
+                    <span className="rp-pos">{p.pos}</span>
+                  </div>
+                  <div className={`rp-eq${isLead ? ' rp-lead' : ''}`}>
+                    {revealCur ? (
+                      <span key={cur} className="pot-bump">
+                        {(eq * 100).toFixed(1)}%
+                      </span>
+                    ) : (
+                      <span className="rp-eq-hidden" title="퀴즈 모드 — 정답 확정 후 공개">
+                        ❓
+                      </span>
+                    )}
+                    {isWin && (
+                      <span className="pill push" style={{ marginLeft: 6 }}>
+                        승
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Board: revealed progressively per step */}
+          <div className="rp-board">
+            <div className="pot-label">
+              {STREET_KO[row.street]}
+              {potLabel && (
+                <>
+                  {' '}
+                  · 팟 <span style={{ fontWeight: 800 }}>{potLabel}</span>
+                </>
+              )}
+            </div>
+            <div className="rp-board-cards">
+              {boardCards.length === 0 ? (
+                <span className="rp-noboard">프리플랍 올인 — 보드 없음</span>
+              ) : (
+                boardCards.map((cs, i) =>
+                  i < row.cards ? (
+                    <CardSpan key={`${i}${cs}`} cs={cs} w={38} deal />
+                  ) : (
+                    <span key={`slot${i}`} className="rp-slot" />
+                  ),
+                )
+              )}
+            </div>
+            {atEnd && badBeat && revealCur && (
+              <div className="rp-badbeat">
+                💥 배드빗 — 프리플랍 {((preEq[winnerIdx] ?? 0) * 100).toFixed(1)}% 언더독 {winnerName}의 역전승!
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Quiz panel: ask on unanswered steps, show stored feedback on answered ones */}
+        {quizOn &&
+          (quizPending ? (
+            <div className="rp-quiz">
+              <div className="rp-quiz-title">
+                🎯 퀴즈 — {STREET_KO[row.street]} ({cur + 1}/{rows.length})
+              </div>
+              <div className="rp-quiz-q">Q1. 지금 누가 앞서 있을까요?</div>
+              <div className="rp-quiz-opts">
+                {players.map((p, pi) => {
+                  const hole = p.cards.replace(/\s+/g, '').match(/.{2}/g) ?? [];
+                  return (
+                    <button
+                      key={pi}
+                      type="button"
+                      className={`secondary rp-quiz-opt${pick === pi ? ' rp-quiz-opt-on' : ''}`}
+                      onClick={() => setPick(pi)}
+                    >
+                      <span>{p.name || `P${pi + 1}`}</span>
+                      <span style={{ display: 'inline-flex', gap: 2 }}>
+                        {hole.map((cs, ci) => (
+                          <CardSpan key={ci} cs={cs} w={22} />
+                        ))}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="rp-quiz-q">
+                Q2. {players[0]?.name || 'P1'}의 에쿼티는 몇 %일까요? — <strong style={{ color: 'var(--accent)' }}>{guess}%</strong>
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={1}
+                value={guess}
+                onChange={(e) => setGuess(+e.target.value)}
+                style={{ width: '100%' }}
+              />
+              <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <button onClick={confirmQuiz} disabled={pick === null}>
+                  확정
+                </button>
+                {pick === null && (
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    먼저 Q1에서 플레이어를 선택하세요.
+                  </span>
+                )}
+              </div>
+            </div>
+          ) : (
+            curAns && (
+              <div className="rp-quiz">
+                <div className="rp-quiz-title">🎯 퀴즈 결과 — {STREET_KO[row.street]}</div>
+                <div className="rp-quiz-fb">
+                  Q1 {curAns.q1Correct ? '✅ 정답!' : '❌ 오답'} — 리더:{' '}
+                  <strong>{players[leaderIdx]?.name || `P${leaderIdx + 1}`}</strong> ({(maxEq * 100).toFixed(1)}%) · 내 선택:{' '}
+                  {players[curAns.pick]?.name || `P${curAns.pick + 1}`}
+                </div>
+                <div className="rp-quiz-fb">
+                  Q2 예측 {curAns.guess}% · 실제 {((row.equities[0] ?? 0) * 100).toFixed(1)}% · 오차{' '}
+                  <strong>{curAns.err.toFixed(1)}%p</strong> {curAns.err <= 10 ? '✅ 정답 (±10%p 이내)' : '❌ 오답 (±10%p 초과)'}
+                </div>
+              </div>
+            )
+          ))}
+
+        {/* Step controls */}
+        <div className="rp-controls">
+          <button className="secondary" onClick={() => go(0)} disabled={cur === 0}>
+            ⏮ 처음
+          </button>
+          <button className="secondary" onClick={() => go(cur - 1)} disabled={cur === 0}>
+            ◀ 이전
+          </button>
+          <button className="secondary" onClick={toggleAuto} disabled={last === 0 || quizOn} title={quizOn ? '퀴즈 모드 중에는 자동재생을 사용할 수 없습니다' : undefined}>
+            {auto ? '⏸ 정지' : '▶️ 자동재생'}
+          </button>
+          <button type="button" className={`secondary rp-quiz-toggle${quizOn ? ' rp-quiz-toggle-on' : ''}`} onClick={toggleQuiz}>
+            🎯 퀴즈 모드{quizOn ? ' ON' : ''}
+          </button>
+          <button className="secondary" onClick={() => go(cur + 1)} disabled={cur === last}>
+            ▶ 다음
+          </button>
+          <button className="secondary" onClick={() => go(last)} disabled={cur === last}>
+            ⏭ 끝
+          </button>
+        </div>
+        <div className="rp-tabs">
+          {rows.map((r, i) => (
+            <button key={r.street} type="button" className={`rp-tab${i === cur ? ' rp-tab-on' : ''}`} onClick={() => go(i)}>
+              {STREET_KO[r.street]}
+            </button>
+          ))}
+        </div>
+
+        {/* Scorecard once the last available step has been answered */}
+        {scoreVisible && (
+          <div className="rp-score">
+            <div className="rp-quiz-title" style={{ marginBottom: 10 }}>
+              📋 퀴즈 성적표
+            </div>
+            <div className="rp-score-row">
+              <span>
+                Q1 리더 맞히기{' '}
+                <strong>
+                  {q1Count} / {rows.length}
+                </strong>
+              </span>
+              <span>
+                Q2 평균 오차 <strong>{avgErr.toFixed(1)}%p</strong>
+              </span>
+              <span className={`rp-grade rp-grade-${grade.toLowerCase()}`} title={`등급 ${grade}`}>
+                {grade}
+              </span>
+            </div>
+            <button className="secondary" onClick={retryQuiz}>
+              🔄 다시 도전
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Per-street summary: table + equity line graph */}
+      <div className="card">
+        <h2 style={{ fontSize: 16 }}>스트리트별 에쿼티 요약</h2>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+            <thead>
+              <tr style={{ color: 'var(--text-dim)', textAlign: 'right' }}>
+                <th style={{ textAlign: 'left', padding: '6px 8px' }}>플레이어</th>
+                {rows.map((r) => (
+                  <th key={r.cards} style={{ padding: '6px 8px' }}>
+                    {STREET_KO[r.street]}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {players.map((p, pi) => {
+                const isWinner = pi === winnerIdx && finalRevealed;
+                return (
+                  <tr
+                    key={pi}
+                    style={{
+                      borderTop: '1px solid var(--border)',
+                      background: isWinner ? 'rgba(63,185,80,0.08)' : undefined,
+                    }}
+                  >
+                    <td style={{ padding: '8px', textAlign: 'left' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ minWidth: 70 }}>
+                          <strong>{p.name || `P${pi + 1}`}</strong>
+                          <span className="muted" style={{ marginLeft: 6, fontSize: 12 }}>
+                            {p.pos}
+                          </span>
+                        </span>
+                        <PlayingCards cards={p.cards} />
+                        {isWinner && (
+                          <span className="pill push" style={{ marginLeft: 4 }}>
+                            승
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    {rows.map((r, ri) => {
+                      const eq = r.equities[pi];
+                      const hidden = quizOn && answers[ri] === undefined; // quiz: not answered yet
+                      const best = !hidden && eq === Math.max(...r.equities);
+                      return (
+                        <td
+                          key={r.cards}
+                          style={{
+                            padding: '8px',
+                            textAlign: 'right',
+                            fontVariantNumeric: 'tabular-nums',
+                            fontWeight: best ? 700 : 400,
+                            color: hidden ? 'var(--text-dim)' : best ? 'var(--accent)' : 'var(--text)',
+                          }}
+                        >
+                          {hidden ? '?' : `${(eq * 100).toFixed(1)}%`}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ marginTop: 16 }}>
+          <EquityGraph rows={rows} colors={colors} step={cur} mask={rows.map((_, i) => quizOn && answers[i] === undefined)} />
+          <div className="rp-legend">
+            {players.map((p, pi) => (
+              <span key={pi}>
+                <span className="rp-dot" style={{ background: colors[pi] }} />
+                {p.name || `P${pi + 1}`}
+              </span>
+            ))}
+            <span style={{ fontSize: 11 }}>세로 점선 = 현재 스트리트</span>
+          </div>
+        </div>
+
+        {winnerIdx >= 0 && (!quizOn || allAnswered) && (
+          <p className="muted" style={{ marginTop: 12, fontSize: 13 }}>
+            올인 시점(프리플랍) 에쿼티 —{' '}
+            {players.map((p, i) => `${p.name || `P${i + 1}`} ${((preEq[i] ?? 0) * 100).toFixed(1)}%`).join(' · ')}.{' '}
+            최종 승자: <strong style={{ color: 'var(--accent)' }}>{winnerName}</strong>
+            {badBeat ? ' (언더독 역전 — 배드빗)' : ''}.
+          </p>
+        )}
+      </div>
+    </>
+  );
+}
+
+/** Inline SVG line graph: equity % per street, one player-colored polyline with dots.
+ *  `mask[i]` hides step i's values (quiz mode: not answered yet). */
+function EquityGraph({
+  rows,
+  colors,
+  step,
+  mask,
+}: {
+  rows: StreetEquity[];
+  colors: string[];
+  step: number;
+  mask?: boolean[];
+}) {
+  const W = 380;
+  const H = 150;
+  const padL = 36;
+  const padR = 14;
+  const padT = 12;
+  const padB = 24;
+  const iw = W - padL - padR;
+  const ih = H - padT - padB;
+  const x = (i: number) => (rows.length <= 1 ? padL + iw / 2 : padL + (iw * i) / (rows.length - 1));
+  const y = (e: number) => padT + (1 - e) * ih;
+
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      style={{ width: '100%', maxWidth: 480, height: 'auto', display: 'block' }}
+      role="img"
+      aria-label="스트리트별 에쿼티 변화 그래프"
+    >
+      {[0, 0.25, 0.5, 0.75, 1].map((g) => (
+        <g key={g}>
+          <line
+            x1={padL}
+            x2={W - padR}
+            y1={y(g)}
+            y2={y(g)}
+            stroke="var(--border)"
+            strokeWidth={g === 0.5 ? 1 : 0.5}
+            strokeDasharray={g === 0.5 ? '4 3' : undefined}
+          />
+          {(g === 0 || g === 0.5 || g === 1) && (
+            <text x={padL - 5} y={y(g) + 3} textAnchor="end" fontSize="9" fill="var(--text-dim)">
+              {Math.round(g * 100)}%
+            </text>
+          )}
+        </g>
+      ))}
+      {/* Current step marker */}
+      <line x1={x(step)} x2={x(step)} y1={padT} y2={padT + ih} stroke="var(--text-dim)" strokeWidth={1} strokeDasharray="2 3" />
+      {rows.map((r, i) => (
+        <text
+          key={r.cards}
+          x={x(i)}
+          y={H - 6}
+          textAnchor="middle"
+          fontSize="10"
+          fontWeight={i === step ? 700 : 400}
+          fill={i === step ? 'var(--text)' : 'var(--text-dim)'}
+        >
+          {STREET_KO[r.street]}
+        </text>
+      ))}
+      {colors.map((c, pi) => (
+        <g key={pi}>
+          <polyline
+            points={rows
+              .map((r, i) => (mask?.[i] ? null : `${x(i)},${y(r.equities[pi] ?? 0)}`))
+              .filter((p): p is string => p !== null)
+              .join(' ')}
+            fill="none"
+            stroke={c}
+            strokeWidth={2}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+          {rows.map((r, i) =>
+            mask?.[i] ? null : (
+              <circle
+                key={r.cards}
+                cx={x(i)}
+                cy={y(r.equities[pi] ?? 0)}
+                r={i === step ? 4 : 2.5}
+                fill={c}
+                stroke="var(--bg-card)"
+                strokeWidth={1}
+              />
+            ),
+          )}
+        </g>
+      ))}
+      {/* Masked steps (quiz mode, unanswered): "?" placeholder */}
+      {mask?.some(Boolean) &&
+        rows.map((r, i) =>
+          mask[i] ? (
+            <text key={r.cards} x={x(i)} y={y(0.5) + 3} textAnchor="middle" fontSize="11" fill="var(--text-dim)">
+              ?
+            </text>
+          ) : null,
+        )}
+    </svg>
   );
 }
