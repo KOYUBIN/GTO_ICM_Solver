@@ -326,9 +326,51 @@ function ChatPanel({ room, youId }: { room: RoomView; youId: string | null }) {
 function HandHistory({ room }: { room: RoomView }) {
   const hist = room.history ?? [];
   if (!hist.length) return null;
+
+  // Session stats from the recorded hands: wins and chips collected per player.
+  const stats = new Map<string, { wins: number; won: number }>();
+  for (const h of hist) {
+    for (const w of h.winners) {
+      const s = stats.get(w.name) ?? { wins: 0, won: 0 };
+      s.wins += 1;
+      s.won += w.amount;
+      stats.set(w.name, s);
+    }
+  }
+  const ranked = [...stats.entries()].sort((a, b) => b[1].won - a[1].won);
+
+  /** Open a showdown hand in the /replay street-equity analyzer. */
+  function analyze(h: NonNullable<RoomView['history']>[number]) {
+    const cards: string[] = [];
+    for (const r of h.revealed.slice(0, 2)) {
+      const cs = r.cards.match(/.{2}/g) ?? [];
+      cards.push(...cs.slice(0, 2));
+    }
+    for (const cs of h.board.match(/.{2}/g) ?? []) cards.push(cs);
+    try {
+      sessionStorage.setItem(
+        'replayPrefill',
+        JSON.stringify({ title: `${room.name} · 핸드 #${h.handNumber}`, pot: String(h.pot), cards }),
+      );
+    } catch {
+      /* ignore */
+    }
+    window.open('/replay?from=history', '_blank');
+  }
+
   return (
     <div className="card">
       <h2>🕘 지난 핸드</h2>
+      {ranked.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+          {ranked.map(([name, s], i) => (
+            <span key={name} className="pill" style={{ background: 'var(--bg-elevated)' }}>
+              {i === 0 ? '👑 ' : ''}
+              {name} {s.wins}승 · +{s.won.toLocaleString()}
+            </span>
+          ))}
+        </div>
+      )}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 240, overflowY: 'auto' }}>
         {[...hist].reverse().map((h) => (
           <div
@@ -357,9 +399,18 @@ function HandHistory({ room }: { room: RoomView }) {
                   })}
                 </span>
                 {h.revealed.length >= 2 && (
-                  <span className="muted" style={{ fontSize: 12 }}>
-                    쇼다운: {h.revealed.map((r) => `${r.name} ${r.cards}`).join(' vs ')}
-                  </span>
+                  <>
+                    <span className="muted" style={{ fontSize: 12 }}>
+                      쇼다운: {h.revealed.map((r) => `${r.name} ${r.cards}`).join(' vs ')}
+                    </span>
+                    <button
+                      className="secondary"
+                      onClick={() => analyze(h)}
+                      style={{ padding: '3px 10px', fontSize: 12 }}
+                    >
+                      에쿼티 분석
+                    </button>
+                  </>
                 )}
               </div>
             )}
