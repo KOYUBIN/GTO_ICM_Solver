@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useEffect, useState } from 'react';
 
 const LINKS = [
   { href: '/', label: '대시보드' },
@@ -14,11 +15,20 @@ const LINKS = [
   { href: '/icm', label: 'ICM' },
   { href: '/replay', label: '리플레이' },
   { href: '/analyze', label: '핸드분석' },
+  { href: '/notes', label: '기록장' },
   { href: '/community', label: '커뮤니티' },
 ];
 
 export function Nav() {
   const pathname = usePathname();
+  const [me, setMe] = useState<{ username: string; nick: string } | null>(null);
+  useEffect(() => {
+    fetch('/api/auth/me')
+      .then((r) => r.json())
+      .then((d) => setMe(d.user ?? null))
+      .catch(() => {});
+  }, []);
+  const authHref = me ? '/profile' : '/login';
   return (
     <nav className="nav">
       {LINKS.map((l) => {
@@ -29,6 +39,14 @@ export function Nav() {
           </Link>
         );
       })}
+      <Link
+        href={authHref}
+        className={pathname.startsWith(authHref) ? 'active' : ''}
+        style={{ marginLeft: 'auto' }}
+        title={me?.username}
+      >
+        {me ? me.nick : '로그인'}
+      </Link>
     </nav>
   );
 }
