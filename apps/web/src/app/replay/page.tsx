@@ -731,8 +731,19 @@ function ReplayStage({
   );
 }
 
-/** Inline SVG line graph: equity % per street, one player-colored polyline with dots. */
-function EquityGraph({ rows, colors, step }: { rows: StreetEquity[]; colors: string[]; step: number }) {
+/** Inline SVG line graph: equity % per street, one player-colored polyline with dots.
+ *  `mask[i]` hides step i's values (quiz mode: not answered yet). */
+function EquityGraph({
+  rows,
+  colors,
+  step,
+  mask,
+}: {
+  rows: StreetEquity[];
+  colors: string[];
+  step: number;
+  mask?: boolean[];
+}) {
   const W = 380;
   const H = 150;
   const padL = 36;
@@ -787,26 +798,40 @@ function EquityGraph({ rows, colors, step }: { rows: StreetEquity[]; colors: str
       {colors.map((c, pi) => (
         <g key={pi}>
           <polyline
-            points={rows.map((r, i) => `${x(i)},${y(r.equities[pi] ?? 0)}`).join(' ')}
+            points={rows
+              .map((r, i) => (mask?.[i] ? null : `${x(i)},${y(r.equities[pi] ?? 0)}`))
+              .filter((p): p is string => p !== null)
+              .join(' ')}
             fill="none"
             stroke={c}
             strokeWidth={2}
             strokeLinejoin="round"
             strokeLinecap="round"
           />
-          {rows.map((r, i) => (
-            <circle
-              key={r.cards}
-              cx={x(i)}
-              cy={y(r.equities[pi] ?? 0)}
-              r={i === step ? 4 : 2.5}
-              fill={c}
-              stroke="var(--bg-card)"
-              strokeWidth={1}
-            />
-          ))}
+          {rows.map((r, i) =>
+            mask?.[i] ? null : (
+              <circle
+                key={r.cards}
+                cx={x(i)}
+                cy={y(r.equities[pi] ?? 0)}
+                r={i === step ? 4 : 2.5}
+                fill={c}
+                stroke="var(--bg-card)"
+                strokeWidth={1}
+              />
+            ),
+          )}
         </g>
       ))}
+      {/* Masked steps (quiz mode, unanswered): "?" placeholder */}
+      {mask?.some(Boolean) &&
+        rows.map((r, i) =>
+          mask[i] ? (
+            <text key={r.cards} x={x(i)} y={y(0.5) + 3} textAnchor="middle" fontSize="11" fill="var(--text-dim)">
+              ?
+            </text>
+          ) : null,
+        )}
     </svg>
   );
 }
