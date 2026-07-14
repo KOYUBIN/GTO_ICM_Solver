@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { streetEquities, parseCards, type StreetEquity } from '@gto/engine';
 import { PlayingCards } from '@/components/Cards';
+import { BoardPicker } from '@/components/Pickers';
 
 const POSITIONS = ['UTG', 'UTG1', 'MP', 'LJ', 'HJ', 'CO', 'BTN', 'SB', 'BB'];
 const STREET_KO: Record<string, string> = { preflop: '프리플랍', flop: '플랍', turn: '턴', river: '리버' };
@@ -34,6 +35,8 @@ export default function ReplayPage() {
   const [pot, setPot] = useState('599114');
   const [board, setBoard] = useState('8s7c2d Qh 3s');
   const [players, setPlayers] = useState<Player[]>(DEFAULT_PLAYERS);
+  // Which card picker is open: a player index, the board, or none.
+  const [openIdx, setOpenIdx] = useState<number | 'board' | null>(null);
   const [result, setResult] = useState<{ rows: StreetEquity[]; players: Player[]; board: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -81,7 +84,19 @@ export default function ReplayPage() {
     if (players.length < 6) setPlayers([...players, { name: `P${players.length + 1}`, pos: 'CO', cards: '' }]);
   }
   function removePlayer(i: number) {
-    if (players.length > 2) setPlayers(players.filter((_, idx) => idx !== i));
+    if (players.length > 2) {
+      setPlayers(players.filter((_, idx) => idx !== i));
+      setOpenIdx(null); // indices shift; close any open picker
+    }
+  }
+
+  /** Cards taken by other fields: other players' hole cards (+ board for a player picker). */
+  function usedFor(target: number | 'board'): string {
+    const others = players
+      .filter((_, idx) => idx !== target)
+      .map((p) => p.cards)
+      .join('');
+    return target === 'board' ? others : others + board;
   }
 
   function analyze() {
@@ -149,7 +164,22 @@ export default function ReplayPage() {
         </div>
         <div style={{ marginTop: 12 }}>
           <label>보드 (0/3/4/5장 · 예: 8s7c2d Qh 3s)</label>
-          <input type="text" value={board} onChange={(e) => setBoard(e.target.value)} />
+          <div className="row" style={{ alignItems: 'center' }}>
+            <input type="text" value={board} onChange={(e) => setBoard(e.target.value)} />
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setOpenIdx(openIdx === 'board' ? null : 'board')}
+              style={{ flex: '0 0 auto', padding: '4px 10px', fontSize: 12 }}
+            >
+              선택 {openIdx === 'board' ? '▲' : '▼'}
+            </button>
+          </div>
+          {openIdx === 'board' && (
+            <div style={{ marginTop: 8 }}>
+              <BoardPicker value={board} onChange={setBoard} max={5} used={usedFor('board')} />
+            </div>
+          )}
           {board.trim() && (
             <div style={{ marginTop: 8 }}>
               <PlayingCards cards={board} />
@@ -160,36 +190,56 @@ export default function ReplayPage() {
         <div style={{ marginTop: 16 }}>
           <label>플레이어 (올인 참가자)</label>
           {players.map((p, i) => (
-            <div key={i} className="row" style={{ marginTop: 8, alignItems: 'center' }}>
-              <input
-                type="text"
-                value={p.name}
-                placeholder="이름"
-                onChange={(e) => setPlayer(i, { name: e.target.value })}
-                style={{ flex: '0 0 110px' }}
-              />
-              <select value={p.pos} onChange={(e) => setPlayer(i, { pos: e.target.value })} style={{ flex: '0 0 90px' }}>
-                {POSITIONS.map((pos) => (
-                  <option key={pos} value={pos}>
-                    {pos}
-                  </option>
-                ))}
-              </select>
-              <input
-                type="text"
-                value={p.cards}
-                placeholder="홀카드 (예: KsKc)"
-                onChange={(e) => setPlayer(i, { cards: e.target.value })}
-              />
-              {p.cards.replace(/\s+/g, '').length === 4 && isCards(p.cards, 2) && <PlayingCards cards={p.cards} />}
-              <button
-                className="secondary"
-                onClick={() => removePlayer(i)}
-                disabled={players.length <= 2}
-                style={{ flex: '0 0 auto', padding: '6px 10px' }}
-              >
-                삭제
-              </button>
+            <div key={i} style={{ marginTop: 8 }}>
+              <div className="row" style={{ alignItems: 'center' }}>
+                <input
+                  type="text"
+                  value={p.name}
+                  placeholder="이름"
+                  onChange={(e) => setPlayer(i, { name: e.target.value })}
+                  style={{ flex: '0 0 110px' }}
+                />
+                <select value={p.pos} onChange={(e) => setPlayer(i, { pos: e.target.value })} style={{ flex: '0 0 90px' }}>
+                  {POSITIONS.map((pos) => (
+                    <option key={pos} value={pos}>
+                      {pos}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  value={p.cards}
+                  placeholder="홀카드 (예: KsKc)"
+                  onChange={(e) => setPlayer(i, { cards: e.target.value })}
+                />
+                {p.cards.replace(/\s+/g, '').length === 4 && isCards(p.cards, 2) && <PlayingCards cards={p.cards} />}
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setOpenIdx(openIdx === i ? null : i)}
+                  style={{ flex: '0 0 auto', padding: '6px 10px', fontSize: 12 }}
+                >
+                  선택 {openIdx === i ? '▲' : '▼'}
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() => removePlayer(i)}
+                  disabled={players.length <= 2}
+                  style={{ flex: '0 0 auto', padding: '6px 10px' }}
+                >
+                  삭제
+                </button>
+              </div>
+              {openIdx === i && (
+                <div style={{ marginTop: 8 }}>
+                  <BoardPicker
+                    value={p.cards}
+                    onChange={(v) => setPlayer(i, { cards: v })}
+                    max={2}
+                    used={usedFor(i)}
+                  />
+                </div>
+              )}
             </div>
           ))}
           <button className="secondary" style={{ marginTop: 8 }} onClick={addPlayer} disabled={players.length >= 6}>

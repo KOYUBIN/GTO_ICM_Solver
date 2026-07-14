@@ -1,7 +1,20 @@
 'use client';
 
-import { useState } from 'react';
-import { solvePostflop, parseRange, rangeToCombos, gridLabel, cardRank, cardSuit, parseCards, type Combo } from '@gto/engine';
+import { useEffect, useState } from 'react';
+import {
+  solvePostflop,
+  parseRange,
+  rangeToCombos,
+  gridLabel,
+  cardRank,
+  cardSuit,
+  parseCards,
+  getChart,
+  availableRfiPositions,
+  allGridLabels,
+  type Combo,
+  type Position,
+} from '@gto/engine';
 import { ActionGrid } from '@/components/ActionGrid';
 import { PlayingCards } from '@/components/Cards';
 import { BoardPicker, HandGridPicker } from '@/components/Pickers';
@@ -50,6 +63,11 @@ export default function SolverPage() {
   const [error, setError] = useState('');
   const [showBoardPick, setShowBoardPick] = useState(true);
   const [gridFor, setGridFor] = useState<null | 'oop' | 'ip'>(null);
+  const [showChartImport, setShowChartImport] = useState(false);
+  const [chartPos, setChartPos] = useState<Position>('BTN');
+  const [chartSide, setChartSide] = useState<'oop' | 'ip'>('oop');
+  const [chartNote, setChartNote] = useState('');
+  const [copied, setCopied] = useState(false);
   const [result, setResult] = useState<{
     street: 'flop' | 'turn' | 'river';
     grid: Map<string, Record<string, number>>;
@@ -59,6 +77,44 @@ export default function SolverPage() {
     iters: number;
     approximate: boolean;
   } | null>(null);
+
+  // 공유 링크로 열었을 때 쿼리 파라미터로 입력값을 채웁니다.
+  // (useSearchParams는 Suspense 경계를 강제하므로 window.location을 직접 읽습니다.)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const qBoard = params.get('board');
+    if (qBoard) setBoard(qBoard);
+    const qOop = params.get('oop');
+    if (qOop) setOopRange(qOop);
+    const qIp = params.get('ip');
+    if (qIp) setIpRange(qIp);
+    const qPot = Number(params.get('pot'));
+    if (params.get('pot') && Number.isFinite(qPot) && qPot > 0) setPot(qPot);
+    const qBet = Number(params.get('bet'));
+    if (params.get('bet') && Number.isFinite(qBet) && qBet > 0) setBetFraction(qBet);
+  }, []);
+
+  function importChartRange() {
+    const chart = getChart({ gameType: 'cash', stackBB: 100, heroPos: chartPos, line: 'RFI' });
+    const labels = allGridLabels().filter((l) => (chart.hands.get(l)?.raise ?? 0) > 0.5);
+    const value = labels.join(', ');
+    if (chartSide === 'oop') setOopRange(value);
+    else setIpRange(value);
+    setChartNote(`${chartPos} 오픈 레인지 ${labels.length}개 라벨 ${chartSide === 'oop' ? 'OOP' : 'IP'}에 불러옴`);
+  }
+
+  function copyShareLink() {
+    const url =
+      `${window.location.origin}/solver` +
+      `?board=${encodeURIComponent(board)}` +
+      `&oop=${encodeURIComponent(oopRange)}` +
+      `&ip=${encodeURIComponent(ipRange)}` +
+      `&pot=${encodeURIComponent(String(pot))}` +
+      `&bet=${encodeURIComponent(String(betFraction))}`;
+    navigator.clipboard?.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
 
   function combosFrom(input: string): Combo[] {
     const out: Combo[] = [];
@@ -172,6 +228,32 @@ export default function SolverPage() {
             />
           </div>
         )}
+        <div style={{ marginTop: 10 }}>
+          <button className="secondary" onClick={() => setShowChartImport((v) => !v)} style={{ padding: '3px 10px', fontSize: 12 }}>
+            {showChartImport ? '차트 불러오기 접기' : '차트에서 불러오기'}
+          </button>
+          {showChartImport && (
+            <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <select value={chartPos} onChange={(e) => setChartPos(e.target.value as Position)} style={{ width: 'auto' }}>
+                {availableRfiPositions().map((p) => (
+                  <option key={p} value={p}>
+                    {p} 오픈
+                  </option>
+                ))}
+              </select>
+              <select value={chartSide} onChange={(e) => setChartSide(e.target.value as 'oop' | 'ip')} style={{ width: 'auto' }}>
+                <option value="oop">OOP에 적용</option>
+                <option value="ip">IP에 적용</option>
+              </select>
+              <button className="secondary" onClick={importChartRange} style={{ padding: '3px 10px', fontSize: 12 }}>
+                불러오기
+              </button>
+              <span className="muted" style={{ fontSize: 12 }}>
+                {chartNote || '캐시 100bb RFI 오픈 레인지(레이즈 빈도 50% 초과 라벨)를 적용합니다.'}
+              </span>
+            </div>
+          )}
+        </div>
         <div className="row" style={{ marginTop: 14 }}>
           <div>
             <label>팟 (칩)</label>
@@ -208,9 +290,12 @@ export default function SolverPage() {
             정밀도를 높이려면 반복수를 올리세요.
           </p>
         )}
-        <div style={{ marginTop: 16 }}>
+        <div style={{ marginTop: 16, display: 'flex', gap: 8, alignItems: 'center' }}>
           <button onClick={run} disabled={busy || !street}>
             {busy ? '솔빙 중…' : '솔브'}
+          </button>
+          <button className="secondary" onClick={copyShareLink}>
+            {copied ? '복사됨!' : '공유 링크 복사'}
           </button>
         </div>
         {error && (
