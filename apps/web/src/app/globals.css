@@ -943,3 +943,18 @@ a.btn-link:hover {
 .pick-card.suit-d { color: #1f6ae0; }
 .pick-card.suit-c { color: #178a4c; }
 .pick-card:hover:not(:disabled) { filter: brightness(0.92); }
+
+/* Card picker: 13 fluid columns so all 52 cards fit one phone screen. */
+.picker-suit-row {
+  display: grid;
+  grid-template-columns: repeat(13, minmax(0, 1fr));
+  gap: 3px;
+  overflow: visible;
+}
+.pick-card {
+  width: auto;
+  min-width: 0;
+  height: auto;
+  aspect-ratio: 3 / 4.1;
+  font-size: clamp(9px, 2.6vw, 13px);
+}

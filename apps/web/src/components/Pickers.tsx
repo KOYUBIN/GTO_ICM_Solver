@@ -1,5 +1,6 @@
 'use client';
 
+import { useRef } from 'react';
 import { allGridLabels } from '@gto/engine';
 
 const RANKS = ['A', 'K', 'Q', 'J', 'T', '9', '8', '7', '6', '5', '4', '3', '2'];
@@ -102,12 +103,42 @@ export function HandGridPicker({ value, onChange }: { value: string; onChange: (
       .map((t) => t.trim())
       .filter((t) => /^[2-9TJQKA]{2}[so]?$/.test(t)),
   );
-  function toggle(label: string) {
-    const next = new Set(selected);
-    if (next.has(label)) next.delete(label);
-    else next.add(label);
-    // Keep grid order so the output string is stable and readable.
-    onChange(labels.filter((l) => next.has(l)).join(', '));
+  // Drag-to-paint: pointerdown decides paint mode (add/remove from the first
+  // cell), pointermove paints every cell under the finger/cursor. Works on
+  // touch via elementFromPoint since a single touch gesture stays on the
+  // origin element (touch-action: none on the grid stops scrolling).
+  const drag = useRef<{ on: boolean; paint: boolean; work: Set<string> } | null>(null);
+  function commit(work: Set<string>) {
+    onChange(labels.filter((l) => work.has(l)).join(', '));
+  }
+  function applyAt(clientX: number, clientY: number) {
+    const d = drag.current;
+    if (!d?.on) return;
+    const el = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+    const label = el?.dataset?.label;
+    if (!label) return;
+    const had = d.work.has(label);
+    if (d.paint && !had) d.work.add(label);
+    else if (!d.paint && had) d.work.delete(label);
+    else return;
+    commit(d.work);
+  }
+  function onDown(e: React.PointerEvent) {
+    const el = (e.target as HTMLElement).closest('[data-label]') as HTMLElement | null;
+    const label = el?.dataset?.label;
+    if (!label) return;
+    const work = new Set(selected);
+    const paint = !work.has(label);
+    if (paint) work.add(label);
+    else work.delete(label);
+    drag.current = { on: true, paint, work };
+    commit(work);
+  }
+  function onMove(e: React.PointerEvent) {
+    applyAt(e.clientX, e.clientY);
+  }
+  function onUp() {
+    if (drag.current) drag.current.on = false;
   }
   return (
     <div>
@@ -127,19 +158,26 @@ export function HandGridPicker({ value, onChange }: { value: string; onChange: (
           비우기
         </button>
       </div>
-      <div className="range-grid">
+      <div
+        className="range-grid"
+        style={{ touchAction: 'none' }}
+        onPointerDown={onDown}
+        onPointerMove={onMove}
+        onPointerUp={onUp}
+        onPointerLeave={onUp}
+      >
         {labels.map((label) => (
           <div
             key={label}
+            data-label={label}
             className={`range-cell editable${selected.has(label) ? ' on' : ''}${label.length === 2 ? ' pair' : ''}`}
-            onClick={() => toggle(label)}
           >
             {label}
           </div>
         ))}
       </div>
       <p className="muted" style={{ marginTop: 6, fontSize: 12 }}>
-        셀을 탭해 레인지에 넣거나 빼세요. 텍스트로 직접 수정해도 됩니다 (선택 {selected.size}개 라벨).
+        탭하거나 드래그로 칠해서 레인지를 만드세요. 텍스트로 직접 수정해도 됩니다 (선택 {selected.size}개 라벨).
       </p>
     </div>
   );
