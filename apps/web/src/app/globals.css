@@ -934,3 +934,12 @@ a.btn-link:hover {
 .nav a.nav-hot.active {
   background: rgba(63, 185, 80, 0.12);
 }
+
+/* pick-card buttons inherit button{color:#fff} — white-on-white made them look
+   face-down. Give them explicit face colors (4-color deck). */
+.pick-card { color: #14181f; }
+.pick-card.suit-s { color: #14181f; }
+.pick-card.suit-h { color: #d92b39; }
+.pick-card.suit-d { color: #1f6ae0; }
+.pick-card.suit-c { color: #178a4c; }
+.pick-card:hover:not(:disabled) { filter: brightness(0.92); }
