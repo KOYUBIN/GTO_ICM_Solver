@@ -20,3 +20,4 @@ export * from './replay.js';
 export * from './ocr.js';
 export * from './holdem.js';
 export * from './blinds.js';
+export * from './mtt.js';
