@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import { parseRange, rangePercent } from '@gto/engine';
 import { RangeGrid } from '@/components/RangeGrid';
+import { HandGridPicker } from '@/components/Pickers';
 
 const PRESETS: { name: string; range: string }[] = [
   { name: 'UTG 오픈 (~15%)', range: '55+, ATs+, KQs, QJs, JTs, AQo+, KQo' },
@@ -13,6 +14,7 @@ const PRESETS: { name: string; range: string }[] = [
 
 export default function RangesPage() {
   const [input, setInput] = useState(PRESETS[0].range);
+  const [showPicker, setShowPicker] = useState(false);
 
   const { range, percent, error } = useMemo(() => {
     try {
@@ -34,6 +36,16 @@ export default function RangesPage() {
       <div className="card">
         <label>레인지</label>
         <textarea rows={3} value={input} onChange={(e) => setInput(e.target.value)} />
+        <div style={{ marginTop: 8 }}>
+          <button className="secondary" onClick={() => setShowPicker((v) => !v)} style={{ padding: '4px 12px', fontSize: 13 }}>
+            {showPicker ? '그리드 선택 닫기' : '그리드로 선택'}
+          </button>
+        </div>
+        {showPicker && (
+          <div style={{ marginTop: 10 }}>
+            <HandGridPicker value={input} onChange={setInput} />
+          </div>
+        )}
         <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {PRESETS.map((p) => (
             <button key={p.name} className="secondary" onClick={() => setInput(p.range)}>

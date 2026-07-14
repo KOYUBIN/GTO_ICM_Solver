@@ -22,7 +22,7 @@ function MiniCard({ card, small }: { card: number; small?: boolean }) {
   }
   const str = cardToString(card);
   return (
-    <span className={`playing-card${RED.has(str[1]) ? ' red' : ''}`} style={{ width: w, height: h }}>
+    <span className={`playing-card suit-${str[1]}`} style={{ width: w, height: h }}>
       {str[0]}
       {SUIT_GLYPH[str[1]]}
     </span>

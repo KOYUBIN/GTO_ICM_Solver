@@ -53,8 +53,8 @@ function Card({ card, w = 34, deal }: { card: number; w?: number; deal?: boolean
   const str = cardToString(card);
   return (
     <span
-      className={`playing-card${RED.has(str[1]) ? ' red' : ''}${cls}`}
-      style={{ width: w, height: h, fontSize: Math.round(w * 0.44) }}
+      className={`playing-card suit-${str[1]}${cls}`}
+      style={{ width: w, height: h, fontSize: Math.round(w * 0.48) }}
     >
       {str[0]}
       {SUIT_GLYPH[str[1]]}
@@ -391,7 +391,7 @@ function HandHistory({ room }: { room: RoomView }) {
                   {(h.board.match(/.{2}/g) ?? []).map((cs, i) => {
                     const red = cs[1] === 'h' || cs[1] === 'd';
                     return (
-                      <span key={i} className={`playing-card${red ? ' red' : ''}`} style={{ width: 24, height: 34, fontSize: 12 }}>
+                      <span key={i} className={`playing-card suit-${cs[1]}`} style={{ width: 24, height: 34, fontSize: 12 }}>
                         {cs[0].toUpperCase()}
                         {SUIT_GLYPH[cs[1]]}
                       </span>

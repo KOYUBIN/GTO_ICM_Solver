@@ -11,7 +11,7 @@ export function PlayingCards({ cards }: { cards: string }) {
     const rank = clean[i].toUpperCase();
     const suit = clean[i + 1].toLowerCase();
     out.push(
-      <span key={i} className={`playing-card${RED.has(suit) ? ' red' : ''}`}>
+      <span key={i} className={`playing-card suit-${suit}`}>
         {rank}
         {SUIT_GLYPH[suit] ?? suit}
       </span>,
