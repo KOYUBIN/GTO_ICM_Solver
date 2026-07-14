@@ -23,10 +23,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <div className="app-shell">
           <header className="topbar">
+            <Nav />
             <Link href="/" className="brand" aria-label="홈으로">
               GTO<span className="chip">♠</span>Solver
             </Link>
-            <Nav />
           </header>
           <main>{children}</main>
         </div>
