@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { getChart, availableRfiPositions, availableVsRfi } from './charts.js';
+import { getChart, availableRfiPositions, availableVsRfi, availableRfiVs3bet } from './charts.js';
 import { solveRiver, solvePostflop } from './cfr.js';
 import { exactEquity } from './enumerate.js';
 import { calcEquity } from './equity.js';
@@ -37,6 +37,52 @@ test('charts: vs-RFI mixes call/3bet and sums to 1', () => {
 test('charts: catalog helpers return data', () => {
   assert.ok(availableRfiPositions().length >= 5);
   assert.ok(availableVsRfi().length >= 4);
+  const pairs = availableRfiVs3bet();
+  assert.ok(pairs.length >= 4);
+  assert.ok(pairs.some((p) => p.hero === 'BTN' && p.villain === 'SB'));
+});
+
+test('charts: RFI-vs-3bet charted pair — AA 4bets, all labels sum to 1', () => {
+  for (const { hero, villain } of availableRfiVs3bet()) {
+    const s = getChart({
+      gameType: 'cash',
+      stackBB: 100,
+      heroPos: hero,
+      villainPos: villain,
+      line: 'RFI-vs-3bet',
+    });
+    assert.equal(s.source, 'chart', `${hero} vs ${villain} should be charted`);
+    for (const [label, f] of s.hands) {
+      const total = f.fold + f.call + f.raise;
+      assert.ok(Math.abs(total - 1) < 1e-9, `${hero} vs ${villain} ${label} sums to ${total}`);
+      assert.ok(f.fold >= 0 && f.call >= 0 && f.raise >= 0, `${label} has a negative frequency`);
+    }
+    const aa = s.hands.get('AA');
+    assert.ok(aa && aa.raise > 0.9, `${hero} vs ${villain}: AA should (near-)pure 4bet`);
+  }
+});
+
+test('charts: RFI-vs-3bet heuristic pair still returns a valid strategy', () => {
+  const s = getChart({
+    gameType: 'cash',
+    stackBB: 100,
+    heroPos: 'MP',
+    villainPos: 'SB',
+    line: 'RFI-vs-3bet',
+  });
+  assert.equal(s.source, 'heuristic');
+  assert.ok(s.hands.size > 0);
+  let hasRaise = false;
+  let hasCall = false;
+  for (const f of s.hands.values()) {
+    const total = f.fold + f.call + f.raise;
+    assert.ok(Math.abs(total - 1) < 1e-9);
+    assert.ok(f.fold >= 0 && f.call >= 0 && f.raise >= 0);
+    if (f.raise > 0) hasRaise = true;
+    if (f.call > 0) hasCall = true;
+  }
+  // A sensible 3bet defense mixes 4bets and calls.
+  assert.ok(hasRaise && hasCall);
 });
 
 test('enumerate: exact equity matches Monte-Carlo within tolerance', () => {
@@ -176,6 +222,61 @@ test('ocr: hand IDs are not the pot, card rows are not the title', () => {
   assert.equal(r.pot, 599114);
   const t = parseOcrPoker('Ah 7d 2c Ts 9h\n클래식 200억 GTD\nPOT 12000');
   assert.ok(t.title && t.title.includes('GTD'));
+});
+
+test('solvePostflop: node-lock forces 77 to 100% bet in the reported strategy', () => {
+  const board = 'KsQd7h2c3s';
+  const setCombos = rangeToCombos(parseRange('77')).map((x) => x.combo);
+  const setKeys = new Set(setCombos.map((c) => `${c[0]}-${c[1]}`));
+  const oop = [...setCombos, ...rangeToCombos(parseRange('65s')).map((x) => x.combo)];
+  const ip: Combo[] = [parseCards('KdJd') as Combo];
+  const r = solvePostflop({
+    board,
+    oopRange: oop,
+    ipRange: ip,
+    pot: 100,
+    betFraction: 0.75,
+    iterations: 4000,
+    seed: 7,
+    oopLock: { '77': { check: 0, bet: 1 } },
+  });
+  const lockedRows = r.oopStrategy.filter((x) => setKeys.has(`${x.combo[0]}-${x.combo[1]}`));
+  assert.ok(lockedRows.length > 0);
+  for (const row of lockedRows) {
+    assert.ok(row.bet > 0.999, `77 locked to 100% bet, got bet=${row.bet}`);
+  }
+  // Unlocked hands (65s) still solve freely — air should not be forced to bet.
+  const freeRows = r.oopStrategy.filter((x) => !setKeys.has(`${x.combo[0]}-${x.combo[1]}`));
+  assert.ok(freeRows.length > 0);
+});
+
+test('solvePostflop: locking the whole OOP range to bet shifts IP response and OOP EV', () => {
+  // River: OOP = 3 combos of the nuts (77 set) + 4 combos of air (65s), IP =
+  // one top-pair bluff-catcher. Locking OOP to bet 100% (all the air included)
+  // is exploitable: IP's best response deviates from the equilibrium call
+  // frequency, and OOP's EV moves away from the unlocked solve.
+  const board = 'KsQd7h2c3s';
+  const oop = [
+    ...rangeToCombos(parseRange('77')).map((x) => x.combo),
+    ...rangeToCombos(parseRange('65s')).map((x) => x.combo),
+  ];
+  const ip: Combo[] = [parseCards('KdJd') as Combo];
+  const cfg = { board, oopRange: oop, ipRange: ip, pot: 100, betFraction: 0.75, iterations: 8000, seed: 11 };
+  const free = solvePostflop(cfg);
+  const locked = solvePostflop({
+    ...cfg,
+    oopLock: { '77': { check: 0, bet: 1 }, '65s': { check: 0, bet: 1 } },
+  });
+  assert.ok(locked.oopBetFreq > 0.999, `locked bet freq ${locked.oopBetFreq}`);
+  // IP exploits the over-bluffed locked range (call frequency changes a lot).
+  assert.ok(
+    Math.abs(locked.ipCallVsBetFreq - free.ipCallVsBetFreq) > 0.1,
+    `ip call freq should shift: ${free.ipCallVsBetFreq} -> ${locked.ipCallVsBetFreq}`,
+  );
+  assert.ok(
+    Math.abs(locked.oopEV - free.oopEV) > 3,
+    `oop EV should change: ${free.oopEV} -> ${locked.oopEV}`,
+  );
 });
 
 test('solvePostflop: fully-conflicting ranges throw instead of hanging', () => {

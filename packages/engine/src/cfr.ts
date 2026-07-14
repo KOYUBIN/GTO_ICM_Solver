@@ -13,9 +13,9 @@
  *     after OOP bet    -> IP: fold | call (showdown)
  */
 
-import { parseCards, mulberry32 } from './cards.js';
+import { parseCards, mulberry32, cardRank, cardSuit } from './cards.js';
 import { evaluate7 } from './handEval.js';
-import { Combo } from './range.js';
+import { Combo, gridLabel } from './range.js';
 
 type Player = 0 | 1; // 0 = OOP, 1 = IP
 
@@ -296,6 +296,15 @@ export interface PostflopSolveConfig {
   betFraction?: number; // bet as a fraction of the pot (default 0.66)
   iterations?: number;
   seed?: number;
+  /**
+   * Node-lock: force OOP's strategy at the ROOT decision of the input street
+   * for specific 13x13 grid labels ("77", "AKs", "T9o"). Locked strategies are
+   * normalized and used verbatim during CFR — no regret updates happen for
+   * those infosets — so IP (and all later decisions) converges to a best
+   * response against the locked strategy. Reporting (oopStrategy/EV) also
+   * reflects the locked probabilities.
+   */
+  oopLock?: Record<string, { check: number; bet: number }>;
 }
 
 export interface PostflopSolveResult {
@@ -331,6 +340,23 @@ export function solvePostflop(config: PostflopSolveConfig): PostflopSolveResult 
   const oop = config.oopRange.filter((c) => !boardSet0.has(c[0]) && !boardSet0.has(c[1]));
   const ip = config.ipRange.filter((c) => !boardSet0.has(c[0]) && !boardSet0.has(c[1]));
   if (!oop.length || !ip.length) throw new Error('보드 제거 후 레인지가 비었습니다.');
+
+  // Node-lock: map each OOP combo whose grid label is locked to its normalized
+  // [check, bet] strategy, keyed like handKey(0, ...) = "c0.c1".
+  const lockedByHand = new Map<string, [number, number]>();
+  if (config.oopLock) {
+    for (const combo of oop) {
+      const r0 = cardRank(combo[0]);
+      const r1 = cardRank(combo[1]);
+      const suited = r0 === r1 ? null : cardSuit(combo[0]) === cardSuit(combo[1]);
+      const lock = config.oopLock[gridLabel(r0, r1, suited)];
+      if (!lock) continue;
+      const c = Math.max(0, lock.check);
+      const b = Math.max(0, lock.bet);
+      if (!Number.isFinite(c + b) || c + b <= 0) continue;
+      lockedByHand.set(`${combo[0]}.${combo[1]}`, [c / (c + b), b / (c + b)]);
+    }
+  }
 
   interface Info {
     regret: number[];
@@ -382,7 +408,10 @@ export function solvePostflop(config: PostflopSolveConfig): PostflopSolveResult 
   function cfr(board: number[], c0: number, c1: number, player: Player, facing: boolean, hist: string, tr: Player, h0: Combo, h1: Combo, t: number): number {
     const key = `${board.join('-')}|${hist}|${player}|${handKey(player, h0, h1)}`;
     const d = getInfo(key);
-    const strat = regretMatch(d);
+    // Node-lock applies only at OOP's root decision of the input street
+    // (hist === '' happens exactly once, before any action is appended).
+    const locked = player === 0 && hist === '' ? lockedByHand.get(handKey(0, h0, h1)) : undefined;
+    const strat = locked ?? regretMatch(d);
 
     const act = (a: number): number => {
       if (!facing) {
@@ -406,10 +435,14 @@ export function solvePostflop(config: PostflopSolveConfig): PostflopSolveResult 
       const u0 = act(0);
       const u1 = act(1);
       const nodeUtil = strat[0] * u0 + strat[1] * u1;
-      d.regret[0] = Math.max(0, d.regret[0] + (u0 - nodeUtil));
-      d.regret[1] = Math.max(0, d.regret[1] + (u1 - nodeUtil));
+      if (!locked) {
+        d.regret[0] = Math.max(0, d.regret[0] + (u0 - nodeUtil));
+        d.regret[1] = Math.max(0, d.regret[1] + (u1 - nodeUtil));
+      }
       return nodeUtil;
     }
+    // Locked infosets accumulate the locked strategy into the average, so the
+    // reported strategy matches what was actually played.
     d.strat[0] += t * strat[0];
     d.strat[1] += t * strat[1];
     return act(rnd() < strat[0] ? 0 : 1);
@@ -430,13 +463,19 @@ export function solvePostflop(config: PostflopSolveConfig): PostflopSolveResult 
     cfr(initBoard, 0, 0, 0, false, '', 1, h0, h1, it + 1);
   }
 
+  const base = initBoard.join('-');
+  const lockedKeyPrefix = `${base}||0|`;
   const avg = (key: string): [number, number] => {
+    // Locked root infosets report the exact locked probabilities.
+    if (lockedByHand.size > 0 && key.startsWith(lockedKeyPrefix)) {
+      const l = lockedByHand.get(key.slice(lockedKeyPrefix.length));
+      if (l) return l;
+    }
     const d = infosets.get(key);
     if (!d) return [0.5, 0.5];
     const s = d.strat[0] + d.strat[1];
     return s > 0 ? [d.strat[0] / s, d.strat[1] / s] : [0.5, 0.5];
   };
-  const base = initBoard.join('-');
   const oopStrategy = oop.map((combo) => {
     const [check, bet] = avg(`${base}||0|${combo[0]}.${combo[1]}`);
     return { combo, check, bet };

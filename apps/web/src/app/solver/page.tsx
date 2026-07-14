@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   solvePostflop,
   parseRange,
@@ -52,6 +52,94 @@ function boardStreet(n: number): 'flop' | 'turn' | 'river' | null {
   return null;
 }
 
+type LockState = 'bet' | 'check' | 'none';
+
+/**
+ * Node-lock paint grid: tap cycles a cell 강제 벳 → 강제 체크 → 해제, and
+ * dragging paints the state chosen on the first cell (same pointer pattern as
+ * HandGridPicker). Only labels present in the solved OOP range are lockable.
+ */
+function LockGrid({
+  lockable,
+  betSet,
+  checkSet,
+  onChange,
+}: {
+  lockable: Set<string>;
+  betSet: Set<string>;
+  checkSet: Set<string>;
+  onChange: (bet: Set<string>, check: Set<string>) => void;
+}) {
+  const labels = allGridLabels();
+  const drag = useRef<{ on: boolean; mode: LockState; bet: Set<string>; check: Set<string> } | null>(null);
+  const stateOf = (label: string, bet: Set<string>, check: Set<string>): LockState =>
+    bet.has(label) ? 'bet' : check.has(label) ? 'check' : 'none';
+  function paint(label: string) {
+    const d = drag.current;
+    if (!d?.on || !lockable.has(label)) return;
+    if (stateOf(label, d.bet, d.check) === d.mode) return;
+    d.bet.delete(label);
+    d.check.delete(label);
+    if (d.mode === 'bet') d.bet.add(label);
+    else if (d.mode === 'check') d.check.add(label);
+    onChange(new Set(d.bet), new Set(d.check));
+  }
+  function onDown(e: React.PointerEvent) {
+    const el = (e.target as HTMLElement).closest('[data-label]') as HTMLElement | null;
+    const label = el?.dataset?.label;
+    if (!label || !lockable.has(label)) return;
+    const bet = new Set(betSet);
+    const check = new Set(checkSet);
+    const cur = stateOf(label, bet, check);
+    const mode: LockState = cur === 'none' ? 'bet' : cur === 'bet' ? 'check' : 'none';
+    drag.current = { on: true, mode, bet, check };
+    paint(label);
+  }
+  function onMove(e: React.PointerEvent) {
+    if (!drag.current?.on) return;
+    const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+    const label = el?.dataset?.label;
+    if (label) paint(label);
+  }
+  function onUp() {
+    if (drag.current) drag.current.on = false;
+  }
+  return (
+    <div>
+      <div
+        className="range-grid"
+        style={{ touchAction: 'none' }}
+        onPointerDown={onDown}
+        onPointerMove={onMove}
+        onPointerUp={onUp}
+        onPointerLeave={onUp}
+      >
+        {labels.map((label) => {
+          const s = stateOf(label, betSet, checkSet);
+          const cls = lockable.has(label)
+            ? `range-cell editable${s === 'bet' ? ' lock-bet' : s === 'check' ? ' lock-check' : ''}`
+            : 'range-cell lock-off';
+          return (
+            <div key={label} data-label={label} className={cls}>
+              {label}
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ display: 'flex', gap: 14, marginTop: 8, flexWrap: 'wrap' }}>
+        <span className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+          <span style={{ width: 12, height: 12, borderRadius: 3, background: 'var(--danger)', display: 'inline-block' }} />
+          강제 벳 100% ({betSet.size})
+        </span>
+        <span className="muted" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+          <span style={{ width: 12, height: 12, borderRadius: 3, background: 'var(--accent)', display: 'inline-block' }} />
+          강제 체크 100% ({checkSet.size})
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export default function SolverPage() {
   const [board, setBoard] = useState('Ks7h2c');
   const [oopRange, setOopRange] = useState('77, 99, KdQc, 65s');
@@ -76,6 +164,26 @@ export default function SolverPage() {
     ev: number;
     iters: number;
     approximate: boolean;
+    /** Snapshot of the solve inputs, so the node-lock re-solve compares apples to apples. */
+    cfg: {
+      board: string;
+      oopRange: Combo[];
+      ipRange: Combo[];
+      pot: number;
+      betFraction: number;
+      iterations: number;
+      seed: number;
+    };
+  } | null>(null);
+  // 노드락: 강제 벳/체크로 고정할 핸드 라벨과 재솔브 결과.
+  const [lockBet, setLockBet] = useState<Set<string>>(new Set());
+  const [lockCheck, setLockCheck] = useState<Set<string>>(new Set());
+  const [lockBusy, setLockBusy] = useState(false);
+  const [lockedResult, setLockedResult] = useState<{
+    grid: Map<string, Record<string, number>>;
+    betFreq: number;
+    callFreq: number;
+    ev: number;
   } | null>(null);
 
   // 공유 링크로 열었을 때 쿼리 파라미터로 입력값을 채웁니다.
@@ -142,7 +250,7 @@ export default function SolverPage() {
     setBusy(true);
     setTimeout(() => {
       try {
-        const res = solvePostflop({
+        const cfg = {
           board: cleanBoard,
           oopRange: combosFrom(oopRange),
           ipRange: combosFrom(ipRange),
@@ -150,7 +258,8 @@ export default function SolverPage() {
           betFraction,
           iterations,
           seed: 1234,
-        });
+        };
+        const res = solvePostflop(cfg);
         setResult({
           street: res.street,
           grid: aggregate(res.oopStrategy),
@@ -159,12 +268,42 @@ export default function SolverPage() {
           ev: res.oopEV,
           iters: res.iterations,
           approximate: res.approximate,
+          cfg,
         });
+        // 새 기준 솔브가 생기면 이전 노드락 비교는 무효화합니다.
+        setLockedResult(null);
       } catch (e) {
         setError((e as Error).message);
         setResult(null);
+        setLockedResult(null);
       } finally {
         setBusy(false);
+      }
+    }, 10);
+  }
+
+  function runLocked() {
+    if (!result) return;
+    const oopLock: Record<string, { check: number; bet: number }> = {};
+    for (const l of lockBet) oopLock[l] = { check: 0, bet: 1 };
+    for (const l of lockCheck) oopLock[l] = { check: 1, bet: 0 };
+    if (Object.keys(oopLock).length === 0) return;
+    setError('');
+    setLockBusy(true);
+    setTimeout(() => {
+      try {
+        const res = solvePostflop({ ...result.cfg, oopLock });
+        setLockedResult({
+          grid: aggregate(res.oopStrategy),
+          betFreq: res.oopBetFreq,
+          callFreq: res.ipCallVsBetFreq,
+          ev: res.oopEV,
+        });
+      } catch (e) {
+        setError((e as Error).message);
+        setLockedResult(null);
+      } finally {
+        setLockBusy(false);
       }
     }, 10);
   }
@@ -336,6 +475,109 @@ export default function SolverPage() {
           <div className="card">
             <h2>OOP 전략 ({STREET_KO[result.street]} 핸드별 체크/베팅)</h2>
             <ActionGrid data={result.grid} colors={ACTION_COLORS} />
+          </div>
+          <div className="card">
+            <h2>🔒 노드락 (OOP {STREET_KO[result.street]} 첫 액션 고정)</h2>
+            <p className="muted" style={{ fontSize: 13 }}>
+              셀을 탭하면 강제 벳 100% → 강제 체크 100% → 해제 순으로 바뀝니다. 드래그로 여러 핸드를 한 번에
+              칠할 수 있으며, OOP 레인지에 포함된 핸드만 잠글 수 있습니다. 잠긴 핸드는 고정된 채로 다시 솔브되어
+              IP가 고정 전략을 착취하는 최적 대응으로 수렴합니다.
+            </p>
+            <LockGrid
+              lockable={new Set(result.grid.keys())}
+              betSet={lockBet}
+              checkSet={lockCheck}
+              onChange={(bet, check) => {
+                setLockBet(bet);
+                setLockCheck(check);
+              }}
+            />
+            <div style={{ marginTop: 12, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <button onClick={runLocked} disabled={lockBusy || busy || lockBet.size + lockCheck.size === 0}>
+                {lockBusy ? '재솔브 중…' : '노드락 재솔브'}
+              </button>
+              <button
+                className="secondary"
+                onClick={() => {
+                  setLockBet(new Set());
+                  setLockCheck(new Set());
+                  setLockedResult(null);
+                }}
+                disabled={lockBusy || (lockBet.size + lockCheck.size === 0 && !lockedResult)}
+              >
+                잠금 초기화
+              </button>
+              {lockBet.size + lockCheck.size === 0 && (
+                <span className="muted" style={{ fontSize: 12 }}>
+                  잠글 핸드를 먼저 칠하세요.
+                </span>
+              )}
+            </div>
+            {lockedResult && (
+              <div style={{ marginTop: 16 }}>
+                {(() => {
+                  const evDelta = lockedResult.ev - result.ev;
+                  const callDelta = lockedResult.callFreq - result.callFreq;
+                  const betDelta = lockedResult.betFreq - result.betFreq;
+                  const signed = (x: number, digits: number, unit: string) =>
+                    `${x >= 0 ? '+' : ''}${x.toFixed(digits)}${unit}`;
+                  const evColor =
+                    evDelta > 0.005 ? 'var(--accent)' : evDelta < -0.005 ? 'var(--danger)' : undefined;
+                  return (
+                    <>
+                      <div className="stat">
+                        <span>OOP EV 변화 (노드락 − 기존)</span>
+                        <span className="val" style={{ color: evColor }}>
+                          {signed(evDelta, 2, ' 칩')}
+                        </span>
+                      </div>
+                      <div className="stat">
+                        <span>IP 콜 빈도 변화 (vs 베팅)</span>
+                        <span className="val" style={{ color: 'var(--warn)' }}>
+                          {signed(callDelta * 100, 1, '%p')}
+                        </span>
+                      </div>
+                      <div className="stat">
+                        <span>OOP 베팅 빈도 변화</span>
+                        <span className="val">{signed(betDelta * 100, 1, '%p')}</span>
+                      </div>
+                      <div className="row" style={{ marginTop: 14 }}>
+                        <div>
+                          <h3 style={{ fontSize: 15, margin: '0 0 8px' }}>기존 솔브 (언락)</h3>
+                          <div className="stat">
+                            <span>OOP EV</span>
+                            <span className="val">{result.ev.toFixed(2)} 칩</span>
+                          </div>
+                          <div className="stat">
+                            <span>IP 콜 빈도</span>
+                            <span className="val">{(result.callFreq * 100).toFixed(1)}%</span>
+                          </div>
+                          <ActionGrid data={result.grid} colors={ACTION_COLORS} />
+                        </div>
+                        <div>
+                          <h3 style={{ fontSize: 15, margin: '0 0 8px' }}>🔒 노드락 솔브</h3>
+                          <div className="stat">
+                            <span>OOP EV</span>
+                            <span className="val" style={{ color: evColor }}>
+                              {lockedResult.ev.toFixed(2)} 칩
+                            </span>
+                          </div>
+                          <div className="stat">
+                            <span>IP 콜 빈도 (착취 대응)</span>
+                            <span className="val">{(lockedResult.callFreq * 100).toFixed(1)}%</span>
+                          </div>
+                          <ActionGrid data={lockedResult.grid} colors={ACTION_COLORS} />
+                        </div>
+                      </div>
+                      <p className="muted" style={{ marginTop: 10, fontSize: 13 }}>
+                        EV는 몬테카를로 추정이라 약간의 노이즈가 있습니다. 균형에서 벗어난 잠금(과도한 벳/체크)은
+                        보통 OOP EV를 낮춥니다 — IP가 그만큼 착취하기 때문입니다.
+                      </p>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
           </div>
         </>
       )}
