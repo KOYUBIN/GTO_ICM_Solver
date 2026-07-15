@@ -35,7 +35,10 @@ function presetToConfig(p: BlindPreset): RoomConfig {
     levelMinutes: p.levelMinutes,
     actionTimeoutSec: 30,
     autoNextHand: true,
-    allowRebuy: p.isCash, // cash: rebuy on; tournaments: off (play to a winner)
+    // Cash + rebuy tournaments (몬스터) allow rebuys; freezeouts play to a winner.
+    allowRebuy: p.isCash || p.rebuyStack != null,
+    rebuyStack: p.rebuyStack,
+    lateRegLevel: p.lateRegLevel,
   };
 }
 

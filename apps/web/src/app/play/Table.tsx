@@ -130,7 +130,10 @@ export function Table({
   const isHost = !!youId && room.hostId === youId;
   const spectating = !youId;
   const mySeat = youId && state ? state.seats.find((s) => s.id === youId) : undefined;
-  const canRebuy = !!room.config.allowRebuy && !!mySeat && mySeat.stack === 0 && mySeat.status !== 'empty';
+  const regClosed = !!room.clock?.registrationClosed;
+  const bustedNoChips = !!mySeat && mySeat.stack === 0 && mySeat.status !== 'empty';
+  const canRebuy = !!room.config.allowRebuy && bustedNoChips && !regClosed;
+  const rebuyChips = room.config.rebuyStack ?? room.config.startingStack;
 
   const [soundOn, setSoundOn] = useState(false);
   useEffect(() => {
@@ -192,8 +195,18 @@ export function Table({
             >
               <span className="muted">칩이 떨어졌습니다. 리바이로 다음 핸드부터 다시 참가하세요.</span>
               <button onClick={onRebuy} style={{ background: 'var(--warn)' }}>
-                리바이 +{room.config.startingStack.toLocaleString()}
+                리바이 +{rebuyChips.toLocaleString()}
               </button>
+            </div>
+          )}
+          {room.config.allowRebuy && bustedNoChips && regClosed && (
+            <div
+              className="card"
+              style={{ border: '2px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}
+            >
+              <span className="muted">
+                레지 마감 ({room.clock?.lateRegLevel}레벨 종료) — 더 이상 리바이할 수 없습니다.
+              </span>
             </div>
           )}
           {room.gameOver ? (
@@ -776,6 +789,16 @@ function ClockBar({ clock }: { clock: NonNullable<RoomView['clock']> }) {
         </div>
       )}
       {clock.isLastLevel && <div className="muted">최종 레벨</div>}
+      {clock.lateRegLevel != null && (
+        <div>
+          <div className="muted" style={{ fontSize: 12 }}>레지</div>
+          <div
+            style={{ fontWeight: 700, color: clock.registrationClosed ? 'var(--text-dim)' : 'var(--good, #3fb950)' }}
+          >
+            {clock.registrationClosed ? '마감' : `L${clock.lateRegLevel}까지`}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

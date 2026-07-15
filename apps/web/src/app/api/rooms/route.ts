@@ -28,6 +28,8 @@ export async function POST(req: NextRequest) {
     actionTimeoutSec: Math.min(120, num(c.actionTimeoutSec, 30)),
     autoNextHand: c.autoNextHand !== false,
     allowRebuy: c.allowRebuy !== false,
+    rebuyStack: c.rebuyStack != null ? num(c.rebuyStack, 0) || undefined : undefined,
+    lateRegLevel: c.lateRegLevel != null ? num(c.lateRegLevel, 0) || undefined : undefined,
     isPublic: c.isPublic === true,
     levels: sanitizeLevels(c.levels),
   };

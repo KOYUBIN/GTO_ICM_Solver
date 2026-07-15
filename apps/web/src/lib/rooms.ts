@@ -32,6 +32,10 @@ export interface RoomConfig {
   autoNextHand?: boolean;
   /** Allow busted players to rebuy back to the starting stack (cash-style). */
   allowRebuy?: boolean;
+  /** Rebuy stack size when it differs from the starting stack (e.g. 몬스터 리바이 300만). */
+  rebuyStack?: number;
+  /** Late-registration / rebuy cutoff level (1-based); rebuys close after this level. */
+  lateRegLevel?: number;
   /** Show this table in the public lobby list (joinable without a code). */
   isPublic?: boolean;
 }
@@ -103,6 +107,10 @@ export interface TournamentClock {
   /** The next level's blinds, if any. */
   next?: { smallBlind: number; bigBlind: number; ante: number };
   isLastLevel: boolean;
+  /** Late-registration cutoff level (1-based), if the structure sets one. */
+  lateRegLevel?: number;
+  /** True once the clock has passed the late-reg level (rebuys closed). */
+  registrationClosed?: boolean;
 }
 
 /** What the GET endpoint returns: a room with hole cards redacted per-viewer. */
