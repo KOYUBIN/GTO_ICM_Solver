@@ -7,7 +7,7 @@
  * fully-custom config lets friends dial in their own structure.
  */
 
-export type GameSpeed = 'hyper-turbo' | 'turbo' | 'classic' | 'deepstack' | 'cash';
+export type GameSpeed = 'hyper-turbo' | 'turbo' | 'classic' | 'deepstack' | 'cash' | 'monster';
 
 export interface BlindLevel {
   level: number;
@@ -25,6 +25,10 @@ export interface BlindPreset {
   /** Minutes per level (0 for cash / no clock). */
   levelMinutes: number;
   isCash: boolean;
+  /** Optional re-buy stack size (tournaments that allow re-buys). */
+  rebuyStack?: number;
+  /** Optional late-registration cutoff level (1-based). */
+  lateRegLevel?: number;
 }
 
 /** Helper: build a level schedule from [sb, bb, ante] triples. */
@@ -122,6 +126,34 @@ export const BLIND_PRESETS: Record<GameSpeed, BlindPreset> = {
     levelMinutes: 0,
     isCash: true,
     levels: levels([[1, 2, 0]]),
+  },
+  monster: {
+    id: 'monster',
+    name: '몬스터 (파이널 나인)',
+    startingStack: 2_500_000,
+    levelMinutes: 10,
+    isCash: false,
+    rebuyStack: 3_000_000,
+    lateRegLevel: 10, // 레지 마감
+    // BB-sized ante kicks in from level 3 onward.
+    levels: levels([
+      [10_000, 20_000, 0],
+      [20_000, 40_000, 0],
+      [30_000, 60_000, 60_000],
+      [40_000, 80_000, 80_000],
+      [50_000, 100_000, 100_000],
+      [75_000, 150_000, 150_000],
+      [100_000, 200_000, 200_000],
+      [150_000, 300_000, 300_000],
+      [200_000, 400_000, 400_000],
+      [300_000, 600_000, 600_000], // 레지 마감 (L10)
+      [400_000, 800_000, 800_000],
+      [500_000, 1_000_000, 1_000_000],
+      [700_000, 1_400_000, 1_400_000],
+      [1_000_000, 2_000_000, 2_000_000],
+      [1_500_000, 3_000_000, 3_000_000],
+      [2_000_000, 4_000_000, 4_000_000],
+    ]),
   },
 };
 

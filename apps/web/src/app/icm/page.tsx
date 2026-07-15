@@ -1,7 +1,17 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { icm, riskPremium, bubbleFactor, payoutsFor, PAYOUT_PRESETS } from '@gto/engine';
+import {
+  icm,
+  riskPremium,
+  bubbleFactor,
+  payoutsFor,
+  PAYOUT_PRESETS,
+  MONSTER_GAME,
+  monsterPaidCount,
+  monsterPrizePool,
+  monsterPayouts,
+} from '@gto/engine';
 
 const CUSTOM_ID = 'custom';
 const MAX_PLAYERS = 10;
@@ -48,6 +58,41 @@ export default function IcmPage() {
   );
   const [heroIdx, setHeroIdx] = useState(0);
   const [villainIdx, setVillainIdx] = useState(1);
+
+  // ---- 몬스터 게임 (파이널 나인) 빠른 설정 ----
+  const [entriesStr, setEntriesStr] = useState('21');
+  const [rebuysStr, setRebuysStr] = useState(() => String(Math.round(21 * 0.7)));
+  // 리바이를 사용자가 직접 고치기 전에는 엔트리 변경 시 자동으로 70%로 따라갑니다.
+  const [rebuysAuto, setRebuysAuto] = useState(true);
+
+  const monster = useMemo(() => {
+    const entries = Math.max(0, Math.floor(Number(entriesStr) || 0));
+    const rebuys = Math.max(0, Math.floor(Number(rebuysStr) || 0));
+    const paidCount = monsterPaidCount(entries);
+    const pool = monsterPrizePool(entries, rebuys);
+    const avgPayout = paidCount > 0 ? pool / paidCount : 0;
+    return { entries, rebuys, paidCount, pool, avgPayout };
+  }, [entriesStr, rebuysStr]);
+
+  function setEntries(value: string) {
+    setEntriesStr(value);
+    if (rebuysAuto) {
+      const entries = Math.max(0, Math.floor(Number(value) || 0));
+      setRebuysStr(String(Math.round(entries * 0.7)));
+    }
+  }
+
+  function setRebuys(value: string) {
+    setRebuysStr(value);
+    setRebuysAuto(false);
+  }
+
+  function applyMonster() {
+    setPrizePoolStr(String(monster.pool));
+    setPayoutPcts(monsterPayouts(monster.paidCount).map(fractionToPctStr));
+    // 커스텀 모드로 전환해 지급 인원(paidCount)만큼의 순위가 그대로 유지되도록 합니다.
+    setPresetId(CUSTOM_ID);
+  }
 
   // ---- 파생 값 ----
   const stacks = useMemo(
@@ -151,6 +196,79 @@ export default function IcmPage() {
         Malmuth-Harville 모델로 칩 스택을 상금 기대값으로 환산합니다. 상금 구조 프리셋, 칩찹(chip-chop)
         비교, 버블 팩터까지 한 번에 확인하세요.
       </p>
+
+      {/* 0. 몬스터 게임 (파이널 나인) 빠른 설정 */}
+      <div className="card">
+        <h2>🎰 몬스터 게임 (파이널 나인)</h2>
+        <p className="muted" style={{ marginTop: 0 }}>
+          파이널 나인 홀덤펍 몬스터 게임 구조를 한 번에 세팅합니다. 바이인·리바이 각{' '}
+          {fmtAmount(MONSTER_GAME.buyIn)}원 전액이 프라이즈풀에 포함되며, 7엔트리당 1명 지급 (지급 인원 =
+          엔트리 ÷ 7). 스타트 {fmtAmount(MONSTER_GAME.startStack)} 칩, 리바이{' '}
+          {fmtAmount(MONSTER_GAME.rebuyStack)} 칩 (스택은 아래 표에 실제 값으로 입력).
+        </p>
+
+        <div className="row">
+          <div>
+            <label>엔트리 수</label>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={entriesStr}
+              onChange={(e) => setEntries(e.target.value)}
+            />
+            <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {[21, 28, 35].map((n) => (
+                <button
+                  key={n}
+                  className="secondary preset"
+                  onClick={() => setEntries(String(n))}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label>리바이 수 (기본 엔트리 × 70%)</label>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={rebuysStr}
+              onChange={(e) => setRebuys(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div style={{ marginTop: 16 }}>
+          <div className="stat">
+            <span>지급 인원 (엔트리 ÷ 7)</span>
+            <span className="val">{monster.paidCount}명</span>
+          </div>
+          <div className="stat">
+            <span>
+              프라이즈풀 ({monster.entries} 엔트리 + {monster.rebuys} 리바이) ×{' '}
+              {fmtAmount(MONSTER_GAME.buyIn)}원
+            </span>
+            <span className="val">{fmtAmount(monster.pool)}원</span>
+          </div>
+          <div className="stat">
+            <span>1인 평균 지급</span>
+            <span className="val">{fmtAmount(monster.avgPayout)}원</span>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <button onClick={applyMonster} disabled={monster.pool <= 0}>
+            이 구조 적용
+          </button>
+          <span className="muted">
+            총 상금과 순위별 배분율({monster.paidCount}자리)을 자동으로 채웁니다. 이후 아래 표에 남은
+            플레이어 스택을 입력하면 ICM 지분·상금과 버블 팩터를 확인할 수 있습니다.
+          </span>
+        </div>
+      </div>
 
       {/* 1. 상금 구조 */}
       <div className="card">
