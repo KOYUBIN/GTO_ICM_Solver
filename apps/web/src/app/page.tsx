@@ -3,6 +3,11 @@ import { InstallButton } from '@/components/InstallButton';
 
 const FEATURES = [
   {
+    href: '/trainer',
+    title: '🎓 학습하기 (GTO 트레이너)',
+    desc: 'GTO Wizard 트레이너식 랜덤 스팟 드릴 — RFI·vs RFI·vs 3벳 문제를 풀고 정답률·연속 정답·오답 노트로 복습합니다.',
+  },
+  {
     href: '/notes',
     title: '핸드 기록장 · 개인 노트',
     desc: '오프라인 라이브 세션 핸드를 기록하고(포지션·카드·결과·메모) 개인 노트를 남깁니다. 저장은 내 기기에.',

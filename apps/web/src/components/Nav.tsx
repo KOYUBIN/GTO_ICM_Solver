@@ -28,6 +28,7 @@ const GROUPS: { title: string; links: { href: string; label: string; icon: strin
   {
     title: '분석 · 기록',
     links: [
+      { href: '/trainer', label: '학습하기', icon: '🎓' },
       { href: '/replay', label: '핸드 리플레이', icon: '🎬' },
       { href: '/analyze', label: '핸드 히스토리 분석', icon: '🔍' },
       { href: '/notes', label: '핸드 기록장', icon: '📓' },
