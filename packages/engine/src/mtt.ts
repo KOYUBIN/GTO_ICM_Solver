@@ -348,3 +348,80 @@ export function icmShoveEv(opts: IcmShoveEvOptions): IcmShoveEvResult {
   const deltaICM = evShoveICM - evFoldICM;
   return { evFoldICM, evShoveICM, deltaICM, shoveOk: deltaICM > 0 };
 }
+
+// ---------------------------------------------------------------------------
+// 4) 몬스터 게임 (파이널 나인 홀덤펍) — Korean-pub monster tournament helper
+// ---------------------------------------------------------------------------
+
+/**
+ * 파이널 나인 홀덤펍 "몬스터 게임"의 실제 구조 상수.
+ *
+ * - buyIn / rebuyFee: 바이인·리바이 모두 3만원, 전액 프라이즈풀에 포함.
+ * - startStack / rebuyStack: 스타트 250만 칩, 리바이 300만 칩 (참고용, ICM 계산엔
+ *   실제 현재 스택을 입력).
+ * - lateRegLevel: 레이트 레지스트레이션(리바이) 마감 레벨.
+ */
+export const MONSTER_GAME = {
+  buyIn: 30000,
+  rebuyFee: 30000,
+  startStack: 2_500_000,
+  rebuyStack: 3_000_000,
+  lateRegLevel: 10,
+} as const;
+
+/**
+ * 지급 인원 = floor(엔트리 / 7) (7엔트리당 1명 지급), 최소 1명.
+ * 예: 21→3, 28→4, 35→5, 20→2, 14→2, 7→1, 6→1.
+ */
+export function monsterPaidCount(entries: number): number {
+  return Math.max(1, Math.floor(entries / 7));
+}
+
+/**
+ * 프라이즈풀 = 엔트리 수 × 바이인 + 리바이 수 × 리바이 요금.
+ * 바이인/리바이 요금은 기본값(각 3만원, MONSTER_GAME)에서 가져오며 필요 시 재정의.
+ * 예: monsterPrizePool(21, 15) = (21 + 15) × 30,000 = 1,080,000원.
+ */
+export function monsterPrizePool(
+  entries: number,
+  rebuys: number,
+  buyIn: number = MONSTER_GAME.buyIn,
+  rebuyFee: number = MONSTER_GAME.rebuyFee,
+): number {
+  return entries * buyIn + rebuys * rebuyFee;
+}
+
+/**
+ * 지급 인원별 표준 프라이즈풀 배분율 (index 0 = 우승), 내림차순, 합계 정확히 1.
+ *
+ * 홀덤펍 몬스터 게임에서 흔한 상위 집중형 분배를 앵커로 두고, 지급 인원이 6명을
+ * 넘으면 상위 6자리는 톱헤비를 유지한 채 그 아래는 플랫한 미니멈 캐시 꼬리를 붙입니다.
+ * 어떤 인원이든 마지막에 합계 1로 재정규화합니다.
+ */
+export function monsterPayouts(paidCount: number): number[] {
+  const n = Math.max(0, Math.floor(paidCount));
+  if (n <= 0) return [];
+
+  // 1~6명: 표준 몬스터 앵커(각 합계 1). 7명 이상: 상위 6자리 톱헤비 + 플랫 미니캐시 꼬리.
+  const anchors: Record<number, number[]> = {
+    1: [1],
+    2: [0.65, 0.35],
+    3: [0.5, 0.3, 0.2],
+    4: [0.45, 0.27, 0.18, 0.1],
+    5: [0.4, 0.25, 0.17, 0.11, 0.07],
+    6: [0.38, 0.23, 0.16, 0.11, 0.07, 0.05],
+  };
+
+  let raw: number[];
+  if (n <= 6) {
+    raw = anchors[n].slice();
+  } else {
+    raw = anchors[6].slice();
+    // 6위(0.05)보다 낮은 플랫 미니멈 캐시 — 상위 집중 유지, 내림차순 보존.
+    const minCash = 0.035;
+    for (let i = 6; i < n; i++) raw.push(minCash);
+  }
+
+  const sum = raw.reduce((a, b) => a + b, 0);
+  return raw.map((x) => x / sum);
+}

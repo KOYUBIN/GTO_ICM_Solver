@@ -1,7 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { PAYOUT_PRESETS, payoutsFor, bubbleFactor, icmShoveEv } from './mtt.js';
+import {
+  PAYOUT_PRESETS,
+  payoutsFor,
+  bubbleFactor,
+  icmShoveEv,
+  MONSTER_GAME,
+  monsterPaidCount,
+  monsterPrizePool,
+  monsterPayouts,
+} from './mtt.js';
 
 // ---------- payout presets ----------
 
@@ -144,4 +153,60 @@ test('icmShoveEv: accepts exact hero cards and multiple callers behind', () => {
   assert.ok(Number.isFinite(r.evShoveICM) && Number.isFinite(r.evFoldICM));
   assert.ok(r.evShoveICM > 0 && r.evShoveICM < 1);
   assert.equal(r.shoveOk, r.deltaICM > 0);
+});
+
+// ---------- 몬스터 게임 (파이널 나인) ----------
+
+test('MONSTER_GAME constants match the real 파이널 나인 structure', () => {
+  assert.equal(MONSTER_GAME.buyIn, 30000);
+  assert.equal(MONSTER_GAME.rebuyFee, 30000);
+  assert.equal(MONSTER_GAME.startStack, 2_500_000);
+  assert.equal(MONSTER_GAME.rebuyStack, 3_000_000);
+  assert.equal(MONSTER_GAME.lateRegLevel, 10);
+});
+
+test('monsterPaidCount: floor(entries/7), at least 1', () => {
+  assert.equal(monsterPaidCount(21), 3);
+  assert.equal(monsterPaidCount(28), 4);
+  assert.equal(monsterPaidCount(35), 5);
+  assert.equal(monsterPaidCount(20), 2);
+  assert.equal(monsterPaidCount(14), 2);
+  assert.equal(monsterPaidCount(7), 1);
+  assert.equal(monsterPaidCount(6), 1); // floor(6/7)=0 → max(1, 0) = 1
+});
+
+test('monsterPrizePool: (entries)*buyIn + rebuys*rebuyFee', () => {
+  // 21 엔트리 + 15 리바이, 기본 3만 바이인/리바이.
+  assert.equal(monsterPrizePool(21, 15), 1_080_000);
+  assert.equal(monsterPrizePool(28, 0), 28 * 30000);
+  // 바이인/리바이 요금 재정의.
+  assert.equal(monsterPrizePool(10, 5, 50000, 40000), 10 * 50000 + 5 * 40000);
+});
+
+test('monsterPayouts: length n, sums to exactly 1, strictly descending head', () => {
+  for (let n = 1; n <= 24; n++) {
+    const p = monsterPayouts(n);
+    assert.equal(p.length, n, `length for ${n}`);
+    const sum = p.reduce((a, b) => a + b, 0);
+    assert.ok(Math.abs(sum - 1) < 1e-9, `sum for ${n} = ${sum}`);
+    for (let i = 0; i < p.length; i++) {
+      assert.ok(p[i] > 0, `place ${i} (n=${n}) must be positive`);
+      if (i > 0) {
+        assert.ok(p[i] <= p[i - 1], `payouts must be descending at ${i} (n=${n})`);
+      }
+    }
+  }
+});
+
+test('monsterPayouts: matches the standard monster anchors for 1..6', () => {
+  assert.deepEqual(monsterPayouts(1), [1]);
+  const approx = (a: number[], b: number[]) => {
+    assert.equal(a.length, b.length);
+    for (let i = 0; i < a.length; i++) assert.ok(Math.abs(a[i] - b[i]) < 1e-9, `${a[i]} vs ${b[i]}`);
+  };
+  approx(monsterPayouts(2), [0.65, 0.35]);
+  approx(monsterPayouts(3), [0.5, 0.3, 0.2]);
+  approx(monsterPayouts(4), [0.45, 0.27, 0.18, 0.1]);
+  approx(monsterPayouts(5), [0.4, 0.25, 0.17, 0.11, 0.07]);
+  approx(monsterPayouts(6), [0.38, 0.23, 0.16, 0.11, 0.07, 0.05]);
 });

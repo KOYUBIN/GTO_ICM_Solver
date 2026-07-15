@@ -188,19 +188,19 @@ test('all-in side pot: short stack can only win the main pot', () => {
 // ---------- blind presets ----------
 
 test('all named presets exist with sane structure', () => {
-  for (const id of ['hyper-turbo', 'turbo', 'classic', 'deepstack', 'cash'] as const) {
+  for (const id of ['hyper-turbo', 'turbo', 'classic', 'deepstack', 'cash', 'monster'] as const) {
     const p = BLIND_PRESETS[id];
     assert.ok(p, `missing preset ${id}`);
     assert.ok(p.startingStack > 0);
     assert.ok(p.levels.length >= 1);
     assert.ok(p.name.length > 0);
   }
-  assert.equal(PRESET_LIST.length, 5);
+  assert.equal(PRESET_LIST.length, 6);
   assert.equal(BLIND_PRESETS.cash.isCash, true);
 });
 
 test('blind levels strictly increase for tournament presets', () => {
-  for (const id of ['hyper-turbo', 'turbo', 'classic', 'deepstack'] as const) {
+  for (const id of ['hyper-turbo', 'turbo', 'classic', 'deepstack', 'monster'] as const) {
     const lv = BLIND_PRESETS[id].levels;
     for (let i = 1; i < lv.length; i++) {
       assert.ok(lv[i].bigBlind >= lv[i - 1].bigBlind, `${id} bb should not drop`);
