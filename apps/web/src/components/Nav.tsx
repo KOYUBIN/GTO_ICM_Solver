@@ -17,20 +17,18 @@ const GROUPS: { title: string; links: { href: string; label: string; icon: strin
     title: '솔버 · 전략',
     links: [
       { href: '/solver', label: '포스트플랍 솔버', icon: '🧠' },
-      { href: '/matchup', label: '레인지 매치업', icon: '⚔️' },
+      { href: '/matchup', label: '매치업 · 에쿼티', icon: '⚔️' },
       { href: '/charts', label: '프리플랍 차트', icon: '📊' },
       { href: '/ranges', label: '레인지 뷰어', icon: '🎛️' },
       { href: '/pushfold', label: '푸시/폴드', icon: '📈' },
       { href: '/icm', label: 'ICM 계산기', icon: '🏆' },
-      { href: '/equity', label: '에쿼티 계산기', icon: '⚖️' },
     ],
   },
   {
     title: '분석 · 기록',
     links: [
       { href: '/trainer', label: '학습하기', icon: '🎓' },
-      { href: '/replay', label: '핸드 리플레이', icon: '🎬' },
-      { href: '/analyze', label: '핸드 히스토리 분석', icon: '🔍' },
+      { href: '/replay', label: '리플레이 · 분석', icon: '🎬' },
       { href: '/notes', label: '핸드 기록장', icon: '📓' },
     ],
   },
