@@ -9,8 +9,13 @@ import {
   comboCount,
   getChart,
   labelToCombos,
+  quizBankCounts,
+  sampleChipEvQuizzes,
+  sampleIcmQuizzes,
   POSITIONS_6MAX,
   type ActionLine,
+  type ChipEvQuiz,
+  type IcmQuiz,
   type Position,
   type PreflopAction,
 } from '@gto/engine';
@@ -40,6 +45,34 @@ const LINE_SHORT: Record<ActionLine, string> = {
   'RFI-vs-3bet': 'vs 3벳',
 };
 
+/* ---- new-mode constants ---- */
+
+type Mode = 'preflop' | 'chipev' | 'icm';
+const MODES: Mode[] = ['preflop', 'chipev', 'icm'];
+const MODE_KO: Record<Mode, string> = {
+  preflop: '프리플랍 (실시간)',
+  chipev: '실전 EV (칩)',
+  icm: 'ICM 푸시/폴드',
+};
+const MODE_SHORT: Record<Mode, string> = {
+  preflop: '프리플랍',
+  chipev: '칩 EV',
+  icm: 'ICM',
+};
+
+/** Korean labels for the chip-EV quiz `line` field (differs from ActionLine). */
+const CHIP_LINE_KO: Record<string, string> = {
+  RFI: 'RFI 오픈',
+  'vs-RFI': 'vs RFI',
+  'vs-3bet': 'vs 3벳',
+};
+
+// The precomputed banks. sampleFrom returns the whole pool when n >= size, so
+// these are stable full-pool copies we then draw from with a client-side RNG.
+const CHIP_COUNTS = quizBankCounts();
+const CHIPEV_POOL = sampleChipEvQuizzes(CHIP_COUNTS.chipEv);
+const ICM_POOL = sampleIcmQuizzes(CHIP_COUNTS.icm);
+
 type Mix = Record<PreflopAction, number>;
 
 interface Spot {
@@ -55,7 +88,9 @@ interface Spot {
   source: 'chart' | 'heuristic';
 }
 
-interface WrongNote {
+/** Wrong-note for the live preflop drill (rebuildable into a fresh spot). */
+interface PreflopWrong {
+  mode: 'preflop';
   line: ActionLine;
   heroPos: Position;
   villainPos?: Position;
@@ -65,6 +100,20 @@ interface WrongNote {
   mix: Mix;
   ts: number;
 }
+
+/** Wrong-note for the precomputed chip-EV / ICM quiz modes. */
+interface QuizWrong {
+  mode: 'chipev' | 'icm';
+  id: string;
+  title: string;
+  combo: string;
+  pickedKo: string;
+  correctKo: string;
+  note?: string;
+  ts: number;
+}
+
+type WrongNote = PreflopWrong | QuizWrong;
 
 interface LineStat {
   total: number;
@@ -77,6 +126,8 @@ interface TrainerStats {
   streak: number;
   bestStreak: number;
   byLine: Record<ActionLine, LineStat>;
+  /** Per-mode tally (all three trainer modes contribute). */
+  byMode: Record<Mode, LineStat>;
   /** Last 20 wrong answers, newest first. */
   wrong: WrongNote[];
 }
@@ -94,6 +145,11 @@ function emptyStats(): TrainerStats {
       'vs-RFI': { total: 0, correct: 0 },
       'RFI-vs-3bet': { total: 0, correct: 0 },
     },
+    byMode: {
+      preflop: { total: 0, correct: 0 },
+      chipev: { total: 0, correct: 0 },
+      icm: { total: 0, correct: 0 },
+    },
     wrong: [],
   };
 }
@@ -105,11 +161,20 @@ function loadStats(): TrainerStats {
     if (!raw) return emptyStats();
     const p = JSON.parse(raw) as Partial<TrainerStats>;
     const base = emptyStats();
+    // Back-compat: old wrong-notes have no `mode` -> they were all preflop.
+    const wrong = Array.isArray(p.wrong)
+      ? p.wrong
+          .slice(0, 20)
+          .map((w) =>
+            w && (w as WrongNote).mode ? (w as WrongNote) : ({ ...(w as object), mode: 'preflop' } as WrongNote),
+          )
+      : [];
     return {
       ...base,
       ...p,
       byLine: { ...base.byLine, ...(p.byLine ?? {}) },
-      wrong: Array.isArray(p.wrong) ? p.wrong.slice(0, 20) : [],
+      byMode: { ...base.byMode, ...(p.byMode ?? {}) },
+      wrong,
     };
   } catch {
     return emptyStats();
@@ -180,7 +245,7 @@ function spotFrom(
 }
 
 /** Rebuild a drillable spot from a wrong-note (fresh random combo, same cell). */
-function rebuildSpot(n: WrongNote): Spot {
+function rebuildSpot(n: PreflopWrong): Spot {
   const chart = getChart({
     gameType: 'cash',
     stackBB: STACK_BB,
@@ -253,6 +318,36 @@ function mixSummary(line: ActionLine, mix: Mix): string {
   return parts.join(' · ');
 }
 
+/* ---- new-mode helpers ---- */
+
+/** A random concrete combo string ("AhKd") for a 13x13 grid label. */
+function randomCombo(hand: string): string {
+  const combos = labelToCombos(hand);
+  if (!combos.length) return '';
+  return cardsToString(combos[Math.floor(Math.random() * combos.length)]);
+}
+
+/** Korean label for a chip-EV quiz action (raise -> 올인 when shove). */
+function chipActionKo(a: string, isShove?: boolean): string {
+  if (a === 'call') return '콜';
+  if (a === 'fold') return '폴드';
+  return isShove ? '올인' : '레이즈';
+}
+
+/** "+0.42bb" / "0bb" — signed chip-EV formatting. */
+function fmtBB(v: number): string {
+  if (Math.abs(v) < 0.005) return '0bb';
+  return `${v >= 0 ? '+' : ''}${v.toFixed(2)}bb`;
+}
+
+function chipSituation(q: ChipEvQuiz): string {
+  const s = `${q.heroPos} ${q.stackBB}bb`;
+  if (q.line === 'RFI')
+    return `${s} — 앞선 플레이어 모두 폴드, 첫 액션입니다. ${q.isShove ? '올인?' : '오픈?'}`;
+  if (q.line === 'vs-RFI') return `${s}, ${q.villainPos} 오픈에 대응 — 액션은?`;
+  return `${s}로 오픈 후 ${q.villainPos}가 3벳 — 액션은?`;
+}
+
 /* ----------------------------- tiny renderers --------------------------- */
 
 /** One suit-styled card chip like the replay stage. */
@@ -280,9 +375,455 @@ function HoleCards({ combo, w = 48 }: { combo: string; w?: number }) {
   );
 }
 
+/** 6-max position row highlighting hero (green) and villain (blue). */
+function PositionRow({
+  heroPos,
+  villainPos,
+  stackBB,
+  villainRole,
+}: {
+  heroPos: string;
+  villainPos?: string;
+  stackBB: number;
+  villainRole: string;
+}) {
+  return (
+    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+      {POSITIONS_6MAX.map((p) => {
+        const isHero = p === heroPos;
+        const isVillain = p === villainPos;
+        return (
+          <div
+            key={p}
+            style={{
+              padding: '6px 10px',
+              borderRadius: 8,
+              border: isHero ? '2px solid var(--accent)' : '1px solid var(--border)',
+              background: isHero
+                ? 'rgba(63,185,80,0.12)'
+                : isVillain
+                  ? 'rgba(88,166,255,0.12)'
+                  : 'var(--bg-elevated)',
+              fontWeight: 600,
+              fontSize: 13,
+              textAlign: 'center',
+              minWidth: 56,
+              flex: '1 1 56px',
+            }}
+          >
+            <div>{p}</div>
+            <div style={{ fontSize: 11, color: isHero ? 'var(--accent)' : isVillain ? 'var(--blue)' : 'var(--text-dim)' }}>
+              {isHero ? 'HERO' : isVillain ? villainRole : `${stackBB}bb`}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ------------------------- chip-EV quiz drill --------------------------- */
+
+type Graded = (mode: 'chipev' | 'icm', correct: boolean, wrong: QuizWrong | null) => void;
+
+function ChipEvDrill({ onGraded }: { onGraded: Graded }) {
+  const [quiz, setQuiz] = useState<ChipEvQuiz | null>(null);
+  const [combo, setCombo] = useState('');
+  const [picked, setPicked] = useState<string | null>(null);
+
+  function draw() {
+    const q = CHIPEV_POOL[Math.floor(Math.random() * CHIPEV_POOL.length)];
+    setQuiz(q);
+    setCombo(randomCombo(q.hand));
+    setPicked(null);
+  }
+
+  // Draw client-side (avoids SSR/hydration RNG mismatch).
+  useEffect(() => {
+    draw();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function answer(a: string) {
+    if (!quiz || picked !== null) return;
+    setPicked(a);
+    const correct = a === quiz.best;
+    const wrong: QuizWrong | null = correct
+      ? null
+      : {
+          mode: 'chipev',
+          id: `${quiz.id}-${Date.now()}`,
+          title: `${CHIP_LINE_KO[quiz.line] ?? quiz.line} · ${quiz.heroPos}${
+            quiz.villainPos ? ` vs ${quiz.villainPos}` : ''
+          } ${quiz.stackBB}bb · ${quiz.hand}`,
+          combo,
+          pickedKo: chipActionKo(a, quiz.isShove),
+          correctKo: chipActionKo(quiz.best, quiz.isShove),
+          note: quiz.note,
+          ts: Date.now(),
+        };
+    onGraded('chipev', correct, wrong);
+  }
+
+  if (!quiz) return <p className="muted">문제를 생성하는 중…</p>;
+
+  const correct = picked !== null && picked === quiz.best;
+  const bestFreq = quiz.gtoMix[quiz.best as keyof typeof quiz.gtoMix] ?? 0;
+  const hasEv = quiz.evBB != null;
+
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+        <span className="pill" style={{ background: 'rgba(88,166,255,0.14)', color: 'var(--blue)' }}>
+          {CHIP_LINE_KO[quiz.line] ?? quiz.line} · {quiz.stackBB}bb
+        </span>
+        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+          {quiz.isShove && (
+            <span className="pill" style={{ background: 'rgba(210,153,34,0.15)', color: 'var(--warn)' }}>
+              푸시/폴드
+            </span>
+          )}
+          <span className="pill" style={{ background: 'rgba(210,153,34,0.12)', color: 'var(--warn)' }}>
+            칩 EV 근사
+          </span>
+        </span>
+      </div>
+
+      <p style={{ fontSize: 16, fontWeight: 600, margin: '4px 0 12px' }}>{chipSituation(quiz)}</p>
+
+      <PositionRow
+        heroPos={quiz.heroPos}
+        villainPos={quiz.villainPos}
+        stackBB={quiz.stackBB}
+        villainRole={quiz.line === 'vs-3bet' ? '3벳터' : '오프너'}
+      />
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+        <HoleCards combo={combo} />
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 800 }}>{quiz.hand}</div>
+          <div className="muted" style={{ fontSize: 12 }}>
+            {comboCount(quiz.hand)}콤보 셀 · 실전 EV 문제 은행
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {quiz.actions.map((a) => {
+          const isPick = picked === a;
+          const isBest = picked !== null && a === quiz.best;
+          const color = ACTION_COLORS[a as PreflopAction] ?? 'var(--text)';
+          return (
+            <button
+              key={a}
+              type="button"
+              className="secondary"
+              disabled={picked !== null}
+              onClick={() => answer(a)}
+              style={{
+                flex: '1 1 90px',
+                padding: '14px 10px',
+                fontSize: 16,
+                fontWeight: 800,
+                borderColor: color,
+                color,
+                background: isPick ? `${color}22` : undefined,
+                outline: isBest ? `2px solid ${color}` : undefined,
+                opacity: picked !== null && !isPick && !isBest ? 0.4 : 1,
+              }}
+            >
+              {chipActionKo(a, quiz.isShove)}
+              {isBest ? ' ★' : ''}
+            </button>
+          );
+        })}
+      </div>
+
+      {picked !== null && (
+        <div
+          style={{
+            marginTop: 16,
+            border: `1px solid ${correct ? 'rgba(63,185,80,0.5)' : 'rgba(248,81,73,0.5)'}`,
+            background: correct ? 'rgba(63,185,80,0.07)' : 'rgba(248,81,73,0.07)',
+            borderRadius: 10,
+            padding: 14,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+            <span
+              className="pill"
+              style={{
+                background: correct ? 'rgba(63,185,80,0.18)' : 'rgba(248,81,73,0.18)',
+                color: correct ? 'var(--accent)' : 'var(--danger)',
+                fontWeight: 800,
+              }}
+            >
+              {correct ? '✅ 정답' : '❌ 오답'}
+            </span>
+            <span className="muted" style={{ fontSize: 13 }}>
+              내 선택: <strong style={{ color: 'var(--text)' }}>{chipActionKo(picked, quiz.isShove)}</strong> · 최적{' '}
+              <strong style={{ color: ACTION_COLORS[quiz.best as PreflopAction] ?? 'var(--text)' }}>
+                {chipActionKo(quiz.best, quiz.isShove)} {Math.round(bestFreq * 100)}%
+              </strong>
+            </span>
+          </div>
+
+          {/* GTO mix bars */}
+          <div style={{ display: 'grid', gap: 6 }}>
+            {quiz.actions.map((a) => {
+              const f = quiz.gtoMix[a as keyof typeof quiz.gtoMix] ?? 0;
+              const color = ACTION_COLORS[a as PreflopAction] ?? 'var(--text)';
+              return (
+                <div key={a} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ flex: '0 0 52px', fontSize: 13, fontWeight: 700, color }}>
+                    {chipActionKo(a, quiz.isShove)}
+                  </span>
+                  <div style={{ flex: 1, height: 12, borderRadius: 6, background: 'var(--bg-elevated)', overflow: 'hidden' }}>
+                    <div style={{ width: `${Math.round(f * 100)}%`, height: '100%', background: color }} />
+                  </div>
+                  <span style={{ flex: '0 0 44px', textAlign: 'right', fontSize: 13, fontVariantNumeric: 'tabular-nums' }}>
+                    {Math.round(f * 100)}%
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          {hasEv && (
+            <p style={{ fontSize: 14, fontWeight: 700, margin: '10px 0 0' }}>
+              칩 EV:{' '}
+              <span style={{ color: ACTION_COLORS.raise }}>
+                {chipActionKo('raise', quiz.isShove)} {fmtBB(quiz.evBB?.raise ?? 0)}
+              </span>{' '}
+              /{' '}
+              <span style={{ color: ACTION_COLORS.fold }}>폴드 {fmtBB(quiz.evBB?.fold ?? 0)}</span>
+            </p>
+          )}
+
+          {quiz.note && (
+            <p className="muted" style={{ fontSize: 13, margin: '10px 0 12px' }}>
+              {quiz.note}
+            </p>
+          )}
+
+          <div style={{ marginTop: hasEv || quiz.note ? 0 : 12 }}>
+            <button onClick={draw}>다음 문제 ▶</button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+/* --------------------------- ICM quiz drill ----------------------------- */
+
+function IcmDrill({ onGraded }: { onGraded: Graded }) {
+  const [quiz, setQuiz] = useState<IcmQuiz | null>(null);
+  const [combo, setCombo] = useState('');
+  const [picked, setPicked] = useState<'shove' | 'fold' | null>(null);
+
+  function draw() {
+    const q = ICM_POOL[Math.floor(Math.random() * ICM_POOL.length)];
+    setQuiz(q);
+    setCombo(randomCombo(q.hand));
+    setPicked(null);
+  }
+
+  useEffect(() => {
+    draw();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function answer(a: 'shove' | 'fold') {
+    if (!quiz || picked !== null) return;
+    setPicked(a);
+    const correct = a === quiz.decision;
+    const wrong: QuizWrong | null = correct
+      ? null
+      : {
+          mode: 'icm',
+          id: `${quiz.id}-${Date.now()}`,
+          title: `ICM · ${quiz.heroPos} ${quiz.hand} · ${quiz.payoutName}`,
+          combo,
+          pickedKo: a === 'shove' ? '올인' : '폴드',
+          correctKo: quiz.decision === 'shove' ? '올인' : '폴드',
+          note: quiz.note,
+          ts: Date.now(),
+        };
+    onGraded('icm', correct, wrong);
+  }
+
+  if (!quiz) return <p className="muted">문제를 생성하는 중…</p>;
+
+  const correct = picked !== null && picked === quiz.decision;
+  const bb = quiz.blinds.bb;
+  const deltaPct = quiz.deltaIcm * 100;
+
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+        <span className="pill" style={{ background: 'rgba(88,166,255,0.14)', color: 'var(--blue)' }}>
+          {quiz.payoutName}
+        </span>
+        <span className="pill" style={{ background: 'rgba(210,153,34,0.15)', color: 'var(--warn)' }}>
+          버블 팩터 {quiz.bubbleFactor?.toFixed(2) ?? '—'}
+        </span>
+      </div>
+
+      <p style={{ fontSize: 16, fontWeight: 600, margin: '4px 0 8px' }}>{quiz.scenario}</p>
+      <p className="muted" style={{ fontSize: 13, margin: '0 0 12px' }}>
+        지급:{' '}
+        {quiz.payouts.map((p, i) => `${i + 1}위 ${Math.round(p * 100)}%`).join(' · ')} · 블라인드{' '}
+        {quiz.blinds.sb}/{quiz.blinds.bb}
+        {quiz.blinds.ante ? ` (앤티 ${quiz.blinds.ante})` : ''}
+      </p>
+
+      {/* Stacks — hero highlighted */}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+        {quiz.stacks.map((chips, i) => {
+          const isHero = i === quiz.heroIdx;
+          return (
+            <div
+              key={i}
+              style={{
+                padding: '6px 10px',
+                borderRadius: 8,
+                border: isHero ? '2px solid var(--accent)' : '1px solid var(--border)',
+                background: isHero ? 'rgba(63,185,80,0.12)' : 'var(--bg-elevated)',
+                fontWeight: 600,
+                fontSize: 13,
+                textAlign: 'center',
+                minWidth: 66,
+                flex: '1 1 66px',
+              }}
+            >
+              <div>{isHero ? quiz.heroPos : `P${i + 1}`}</div>
+              <div style={{ fontSize: 11, color: isHero ? 'var(--accent)' : 'var(--text-dim)' }}>
+                {chips.toLocaleString()} ({Math.round(chips / bb)}bb)
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+        <HoleCards combo={combo} />
+        <div>
+          <div style={{ fontSize: 20, fontWeight: 800 }}>{quiz.hand}</div>
+          <div className="muted" style={{ fontSize: 12 }}>
+            {quiz.heroPos} · {Math.round(quiz.stacks[quiz.heroIdx] / bb)}bb · 푸시 or 폴드?
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {(['shove', 'fold'] as const).map((a) => {
+          const isPick = picked === a;
+          const isBest = picked !== null && a === quiz.decision;
+          const color = a === 'shove' ? ACTION_COLORS.raise : ACTION_COLORS.fold;
+          return (
+            <button
+              key={a}
+              type="button"
+              className="secondary"
+              disabled={picked !== null}
+              onClick={() => answer(a)}
+              style={{
+                flex: '1 1 90px',
+                padding: '14px 10px',
+                fontSize: 16,
+                fontWeight: 800,
+                borderColor: color,
+                color,
+                background: isPick ? `${color}22` : undefined,
+                outline: isBest ? `2px solid ${color}` : undefined,
+                opacity: picked !== null && !isPick && !isBest ? 0.4 : 1,
+              }}
+            >
+              {a === 'shove' ? '올인' : '폴드'}
+              {isBest ? ' ★' : ''}
+            </button>
+          );
+        })}
+      </div>
+
+      {picked !== null && (
+        <div
+          style={{
+            marginTop: 16,
+            border: `1px solid ${correct ? 'rgba(63,185,80,0.5)' : 'rgba(248,81,73,0.5)'}`,
+            background: correct ? 'rgba(63,185,80,0.07)' : 'rgba(248,81,73,0.07)',
+            borderRadius: 10,
+            padding: 14,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+            <span
+              className="pill"
+              style={{
+                background: correct ? 'rgba(63,185,80,0.18)' : 'rgba(248,81,73,0.18)',
+                color: correct ? 'var(--accent)' : 'var(--danger)',
+                fontWeight: 800,
+              }}
+            >
+              {correct ? '✅ 정답' : '❌ 오답'}
+            </span>
+            <span className="muted" style={{ fontSize: 13 }}>
+              내 선택: <strong style={{ color: 'var(--text)' }}>{picked === 'shove' ? '올인' : '폴드'}</strong> · 최적{' '}
+              <strong style={{ color: quiz.decision === 'shove' ? ACTION_COLORS.raise : ACTION_COLORS.fold }}>
+                {quiz.decision === 'shove' ? '올인' : '폴드'}
+              </strong>
+            </span>
+          </div>
+
+          <div style={{ display: 'grid', gap: 4, fontSize: 14 }}>
+            <div>
+              <span className="muted" style={{ fontSize: 13 }}>ICM EV: </span>
+              <strong style={{ color: ACTION_COLORS.raise }}>올인 {quiz.evIcmShove.toFixed(4)}</strong> /{' '}
+              <strong style={{ color: ACTION_COLORS.fold }}>폴드 {quiz.evIcmFold.toFixed(4)}</strong>{' '}
+              <span
+                className="pill"
+                style={{
+                  background: deltaPct >= 0 ? 'rgba(63,185,80,0.15)' : 'rgba(248,81,73,0.15)',
+                  color: deltaPct >= 0 ? 'var(--accent)' : 'var(--danger)',
+                }}
+              >
+                Δ {deltaPct >= 0 ? '+' : ''}
+                {deltaPct.toFixed(2)}%
+              </span>
+            </div>
+            {quiz.evChipShoveBB != null && (
+              <div>
+                <span className="muted" style={{ fontSize: 13 }}>칩 EV 대조: </span>
+                <strong style={{ color: quiz.evChipShoveBB >= 0 ? 'var(--accent)' : 'var(--danger)' }}>
+                  올인 {fmtBB(quiz.evChipShoveBB)}
+                </strong>
+                {quiz.evChipShoveBB > 0 && deltaPct < 0 && (
+                  <span className="muted" style={{ fontSize: 12 }}> — 칩으로는 이득이지만 ICM 압박으로 폴드</span>
+                )}
+              </div>
+            )}
+          </div>
+
+          {quiz.note && (
+            <p className="muted" style={{ fontSize: 13, margin: '10px 0 12px' }}>
+              {quiz.note}
+            </p>
+          )}
+
+          <div style={{ marginTop: quiz.note ? 0 : 12 }}>
+            <button onClick={draw}>다음 문제 ▶</button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 /* -------------------------------- page ---------------------------------- */
 
 export default function TrainerPage() {
+  const [mode, setMode] = useState<Mode>('preflop');
   const [spot, setSpot] = useState<Spot | null>(null);
   const [picked, setPicked] = useState<PreflopAction | null>(null);
   const [stats, setStats] = useState<TrainerStats>(emptyStats);
@@ -323,6 +864,7 @@ export default function TrainerPage() {
     const best = Math.max(spot.mix.fold, spot.mix.call, spot.mix.raise);
     const correct = spot.mix[a] >= best * 0.5; // mixed strategies accept close seconds
     const line = stats.byLine[spot.line] ?? { total: 0, correct: 0 };
+    const pf = stats.byMode.preflop;
     const streak = correct ? stats.streak + 1 : 0;
     const next: TrainerStats = {
       ...stats,
@@ -334,10 +876,15 @@ export default function TrainerPage() {
         ...stats.byLine,
         [spot.line]: { total: line.total + 1, correct: line.correct + (correct ? 1 : 0) },
       },
+      byMode: {
+        ...stats.byMode,
+        preflop: { total: pf.total + 1, correct: pf.correct + (correct ? 1 : 0) },
+      },
       wrong: correct
         ? stats.wrong
         : [
             {
+              mode: 'preflop',
               line: spot.line,
               heroPos: spot.heroPos,
               villainPos: spot.villainPos,
@@ -346,7 +893,7 @@ export default function TrainerPage() {
               picked: a,
               mix: spot.mix,
               ts: Date.now(),
-            },
+            } as PreflopWrong,
             ...stats.wrong,
           ].slice(0, 20),
     };
@@ -355,10 +902,34 @@ export default function TrainerPage() {
     if (autoNext) timerRef.current = window.setTimeout(nextSpot, 1800);
   }
 
+  /** Shared grader for the chip-EV / ICM quiz modes (functional update). */
+  function recordQuiz(m: 'chipev' | 'icm', correct: boolean, wrong: QuizWrong | null) {
+    setStats((prev) => {
+      const md = prev.byMode[m];
+      const streak = correct ? prev.streak + 1 : 0;
+      const next: TrainerStats = {
+        ...prev,
+        total: prev.total + 1,
+        correct: prev.correct + (correct ? 1 : 0),
+        streak,
+        bestStreak: Math.max(prev.bestStreak, streak),
+        byMode: {
+          ...prev.byMode,
+          [m]: { total: md.total + 1, correct: md.correct + (correct ? 1 : 0) },
+        },
+        wrong: correct || !wrong ? prev.wrong : [wrong, ...prev.wrong].slice(0, 20),
+      };
+      saveStats(next);
+      return next;
+    });
+  }
+
   function retryWrong() {
-    if (!stats.wrong.length) return;
+    const notes = stats.wrong.filter((w): w is PreflopWrong => w.mode === 'preflop');
+    if (!notes.length) return;
     clearTimer();
-    const spots = stats.wrong.map(rebuildSpot);
+    const spots = notes.map(rebuildSpot);
+    setMode('preflop');
     setSpot(spots[0]);
     setQueue(spots.slice(1));
     setPicked(null);
@@ -380,14 +951,42 @@ export default function TrainerPage() {
   const bestFreq = spot ? Math.max(spot.mix.fold, spot.mix.call, spot.mix.raise) : 0;
   const wasCorrect = spot && picked !== null ? spot.mix[picked] >= bestFreq * 0.5 : false;
   const evLoss = spot && picked !== null ? Math.max(0, bestFreq - spot.mix[picked]) : 0;
+  const hasPreflopWrong = stats.wrong.some((w) => w.mode === 'preflop');
 
   return (
     <div className="container" style={{ maxWidth: 860 }}>
-      <h1>학습하기 · GTO 프리플랍 트레이너</h1>
+      <h1>학습하기 · GTO / ICM 트레이너</h1>
       <p className="subtitle">
-        GTO Wizard 트레이너식 드릴 — 랜덤 스팟(RFI · vs RFI · vs 3벳, 100bb 6맥스)이 출제되고, 차트
-        믹스와 비교해 채점합니다. 기록은 내 기기에 저장됩니다.
+        GTO Wizard 트레이너식 드릴 — 실시간 프리플랍 스팟, 정밀 계산된 실전 칩-EV 문제, ICM 푸시/폴드
+        문제를 풀 수 있습니다. 기록은 내 기기에 저장됩니다. 총 문제 은행: 칩EV {CHIP_COUNTS.chipEv} · ICM{' '}
+        {CHIP_COUNTS.icm}
       </p>
+
+      {/* Mode selector */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+        {MODES.map((m) => {
+          const active = m === mode;
+          return (
+            <button
+              key={m}
+              type="button"
+              className="secondary"
+              onClick={() => setMode(m)}
+              style={{
+                flex: '1 1 140px',
+                padding: '10px 12px',
+                fontSize: 14,
+                fontWeight: 800,
+                borderColor: active ? 'var(--accent)' : 'var(--border)',
+                color: active ? 'var(--accent)' : 'var(--text-dim)',
+                background: active ? 'rgba(63,185,80,0.12)' : 'var(--bg-elevated)',
+              }}
+            >
+              {MODE_KO[m]}
+            </button>
+          );
+        })}
+      </div>
 
       {/* Session stats strip */}
       <div className="card" style={{ padding: 14 }}>
@@ -414,13 +1013,15 @@ export default function TrainerPage() {
             </div>
           ))}
         </div>
+
+        {/* Per-mode accuracy */}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-          {LINES.map((l) => {
-            const s = stats.byLine[l];
+          {MODES.map((m) => {
+            const s = stats.byMode[m];
             const pct = s.total ? Math.round((s.correct / s.total) * 100) : null;
             return (
-              <span key={l} className="pill" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text)' }}>
-                {LINE_SHORT[l]}{' '}
+              <span key={m} className="pill" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text)' }}>
+                {MODE_SHORT[m]}{' '}
                 <strong style={{ color: pct === null ? 'var(--text-dim)' : pct >= 70 ? 'var(--accent)' : 'var(--warn)' }}>
                   {pct === null ? '—' : `${pct}%`}
                 </strong>
@@ -431,11 +1032,36 @@ export default function TrainerPage() {
             );
           })}
         </div>
+
+        {/* Preflop line breakdown (live drill only) */}
+        {mode === 'preflop' && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+            {LINES.map((l) => {
+              const s = stats.byLine[l];
+              const pct = s.total ? Math.round((s.correct / s.total) * 100) : null;
+              return (
+                <span key={l} className="pill" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text)' }}>
+                  {LINE_SHORT[l]}{' '}
+                  <strong style={{ color: pct === null ? 'var(--text-dim)' : pct >= 70 ? 'var(--accent)' : 'var(--warn)' }}>
+                    {pct === null ? '—' : `${pct}%`}
+                  </strong>
+                  <span className="muted" style={{ marginLeft: 4, fontSize: 11 }}>
+                    ({s.correct}/{s.total})
+                  </span>
+                </span>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Drill card */}
       <div className="card">
-        {!spot ? (
+        {mode === 'chipev' ? (
+          <ChipEvDrill onGraded={recordQuiz} />
+        ) : mode === 'icm' ? (
+          <IcmDrill onGraded={recordQuiz} />
+        ) : !spot ? (
           <p className="muted">문제를 생성하는 중…</p>
         ) : (
           <>
@@ -614,8 +1240,8 @@ export default function TrainerPage() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <h2 style={{ margin: 0, fontSize: 16 }}>📕 오답 노트 (최근 {stats.wrong.length}개)</h2>
           <span style={{ display: 'inline-flex', gap: 8 }}>
-            <button className="secondary" onClick={retryWrong} disabled={!stats.wrong.length} style={{ padding: '6px 12px', fontSize: 13 }}>
-              🔁 오답 다시 풀기
+            <button className="secondary" onClick={retryWrong} disabled={!hasPreflopWrong} style={{ padding: '6px 12px', fontSize: 13 }}>
+              🔁 프리플랍 오답 다시 풀기
             </button>
             <button className="secondary" onClick={resetStats} style={{ padding: '6px 12px', fontSize: 13, color: 'var(--danger)' }}>
               초기화
@@ -630,42 +1256,78 @@ export default function TrainerPage() {
               목록 펼치기 / 접기
             </summary>
             <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
-              {stats.wrong.map((n, i) => (
-                <div
-                  key={`${n.ts}-${i}`}
-                  style={{
-                    border: '1px solid var(--border)',
-                    borderLeft: `4px solid ${ACTION_COLORS[bestActionOf(n.mix)]}`,
-                    borderRadius: 8,
-                    padding: '8px 10px',
-                    background: 'var(--bg-elevated)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 10,
-                    flexWrap: 'wrap',
-                  }}
-                >
-                  <HoleCards combo={n.combo} w={24} />
-                  <div style={{ flex: 1, minWidth: 180 }}>
-                    <div style={{ fontSize: 13, fontWeight: 700 }}>
-                      {LINE_SHORT[n.line]} · {n.heroPos}
-                      {n.villainPos ? ` vs ${n.villainPos}` : ''} · {n.label}
+              {stats.wrong.map((n, i) => {
+                if (n.mode === 'preflop') {
+                  return (
+                    <div
+                      key={`${n.ts}-${i}`}
+                      style={{
+                        border: '1px solid var(--border)',
+                        borderLeft: `4px solid ${ACTION_COLORS[bestActionOf(n.mix)]}`,
+                        borderRadius: 8,
+                        padding: '8px 10px',
+                        background: 'var(--bg-elevated)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 10,
+                        flexWrap: 'wrap',
+                      }}
+                    >
+                      <HoleCards combo={n.combo} w={24} />
+                      <div style={{ flex: 1, minWidth: 180 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700 }}>
+                          {LINE_SHORT[n.line]} · {n.heroPos}
+                          {n.villainPos ? ` vs ${n.villainPos}` : ''} · {n.label}
+                        </div>
+                        <div className="muted" style={{ fontSize: 12 }}>
+                          내 선택 <strong style={{ color: 'var(--danger)' }}>{actionName(n.line, n.picked)}</strong> → GTO{' '}
+                          {mixSummary(n.line, n.mix)}
+                        </div>
+                      </div>
                     </div>
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      내 선택 <strong style={{ color: 'var(--danger)' }}>{actionName(n.line, n.picked)}</strong> → GTO{' '}
-                      {mixSummary(n.line, n.mix)}
+                  );
+                }
+                const tag = n.mode === 'icm' ? 'ICM' : '칩 EV';
+                const barColor = n.mode === 'icm' ? 'var(--blue)' : 'var(--warn)';
+                return (
+                  <div
+                    key={`${n.ts}-${i}`}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderLeft: `4px solid ${barColor}`,
+                      borderRadius: 8,
+                      padding: '8px 10px',
+                      background: 'var(--bg-elevated)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <HoleCards combo={n.combo} w={24} />
+                    <div style={{ flex: 1, minWidth: 180 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700 }}>
+                        <span className="pill" style={{ background: 'var(--bg)', color: barColor, marginRight: 6 }}>{tag}</span>
+                        {n.title}
+                      </div>
+                      <div className="muted" style={{ fontSize: 12 }}>
+                        내 선택 <strong style={{ color: 'var(--danger)' }}>{n.pickedKo}</strong> → 정답{' '}
+                        <strong style={{ color: 'var(--accent)' }}>{n.correctKo}</strong>
+                        {n.note ? ` · ${n.note}` : ''}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </details>
         )}
       </div>
 
       <p className="muted" style={{ fontSize: 12 }}>
-        * 채점 기준: 선택한 액션의 GTO 빈도가 최빈 액션 빈도의 50% 이상이면 정답(믹스 전략 허용). EV
-        손실은 빈도 격차를 쓰는 근사치입니다. 차트는 100bb 6맥스 GTO 근사입니다.
+        * 프리플랍 채점: 선택 액션의 GTO 빈도가 최빈 빈도의 50% 이상이면 정답(믹스 허용). 실전 EV·ICM
+        문제는 정밀 계산된 칩-EV Monte-Carlo 및 방향성 ICM 슈브 모델 기반이며 완전한 GTO 균형은 아닙니다.
+        차트는 100bb 6맥스 GTO 근사입니다.
       </p>
     </div>
   );
