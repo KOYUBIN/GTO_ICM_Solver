@@ -45,7 +45,15 @@ export function ActionGrid({ data, colors, selected, onSelect }: ActionGridProps
                   {colors.map(({ action, color }) => {
                     const f = freqs[action] ?? 0;
                     if (f <= 0) return null;
-                    return <div key={action} style={{ height: `${f * 100}%`, background: color }} />;
+                    // flexGrow keeps proportions; minHeight guarantees a low-
+                    // frequency action still shows a visible band (a 3% bet was
+                    // a 1px sliver before — effectively invisible on phones).
+                    return (
+                      <div
+                        key={action}
+                        style={{ flexGrow: f, minHeight: '16%', background: color }}
+                      />
+                    );
                   })}
                 </div>
               )}

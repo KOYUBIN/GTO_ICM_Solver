@@ -151,6 +151,7 @@ export default function SolverPage() {
   const [error, setError] = useState('');
   const [showBoardPick, setShowBoardPick] = useState(true);
   const [gridFor, setGridFor] = useState<null | 'oop' | 'ip'>(null);
+  const [inspect, setInspect] = useState<string | null>(null);
   const [showChartImport, setShowChartImport] = useState(false);
   const [chartPos, setChartPos] = useState<Position>('BTN');
   const [chartSide, setChartSide] = useState<'oop' | 'ip'>('oop');
@@ -474,7 +475,24 @@ export default function SolverPage() {
           </div>
           <div className="card">
             <h2>OOP 전략 ({STREET_KO[result.street]} 핸드별 체크/베팅)</h2>
-            <ActionGrid data={result.grid} colors={ACTION_COLORS} />
+            <ActionGrid data={result.grid} colors={ACTION_COLORS} selected={inspect} onSelect={(l) => setInspect(inspect === l ? null : l)} />
+            {inspect && result.grid.get(inspect) && (
+              <p style={{ marginTop: 10, fontSize: 14 }}>
+                <strong>{inspect}</strong> — 베팅{' '}
+                <strong style={{ color: '#f85149' }}>
+                  {Math.round((result.grid.get(inspect)!.bet ?? 0) * 100)}%
+                </strong>{' '}
+                / 체크{' '}
+                <strong style={{ color: '#3fb950' }}>
+                  {Math.round((result.grid.get(inspect)!.check ?? 0) * 100)}%
+                </strong>
+              </p>
+            )}
+            {!inspect && (
+              <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>
+                셀을 탭하면 정확한 베팅/체크 비율을 보여줍니다. (색 띠는 비율 — 낮은 빈도도 최소 두께로 표시)
+              </p>
+            )}
           </div>
           <div className="card">
             <h2>🔒 노드락 (OOP {STREET_KO[result.street]} 첫 액션 고정)</h2>
