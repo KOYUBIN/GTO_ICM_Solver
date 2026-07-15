@@ -62,6 +62,16 @@ function resolveLevels(config: RoomConfig): BlindLevel[] {
   return [{ level: 1, smallBlind: config.smallBlind, bigBlind: config.bigBlind, ante: config.ante }];
 }
 
+/** The rebuy/late-reg fields, falling back to the preset (몬스터: 300만 / L10). */
+function resolveRebuyMeta(config: RoomConfig): { rebuyStack?: number; lateRegLevel?: number } {
+  const preset =
+    config.presetId && config.presetId !== 'custom' ? getPreset(config.presetId) : undefined;
+  return {
+    rebuyStack: config.rebuyStack ?? preset?.rebuyStack,
+    lateRegLevel: config.lateRegLevel ?? preset?.lateRegLevel,
+  };
+}
+
 function newRoom(name: string, hostName: string, config: RoomConfig): { room: Room; playerId: string } {
   const hostId = genId('u');
   const now = new Date().toISOString();
@@ -76,6 +86,7 @@ function newRoom(name: string, hostName: string, config: RoomConfig): { room: Ro
       actionTimeoutSec: config.actionTimeoutSec ?? 30,
       autoNextHand: config.autoNextHand ?? true,
       allowRebuy: config.allowRebuy ?? true,
+      ...resolveRebuyMeta(config),
     },
     gameState: null,
     createdAt: now,
@@ -106,6 +117,7 @@ function computeClock(room: Room): TournamentClock | null {
     secondsLeft = Math.max(0, Math.ceil(levelLen - (elapsedSec - idx * levelLen)));
     if (idx === lvls.length - 1) secondsLeft = 0;
   }
+  const lateRegLevel = room.config.lateRegLevel;
   return {
     level: lvl.level,
     smallBlind: lvl.smallBlind,
@@ -115,6 +127,8 @@ function computeClock(room: Room): TournamentClock | null {
     secondsLeft,
     next: next ? { smallBlind: next.smallBlind, bigBlind: next.bigBlind, ante: next.ante } : undefined,
     isLastLevel: idx === lvls.length - 1,
+    lateRegLevel,
+    registrationClosed: lateRegLevel != null && lvl.level > lateRegLevel,
   };
 }
 
@@ -495,13 +509,25 @@ export async function rebuyPlayer(id: string, playerId: string): Promise<Room | 
   if (!seat) throw new Error('좌석을 찾을 수 없습니다.');
   if (seat.stack > 0) throw new Error('아직 칩이 남아 있어 리바이할 수 없습니다.');
 
+  // Late-registration cutoff: once the clock passes the late-reg level, no rebuys.
+  const lateRegLevel = room.config.lateRegLevel;
+  if (lateRegLevel != null) {
+    const lvls = room.config.levels ?? [];
+    const curLevel = lvls[currentLevelIndex(room)]?.level ?? 1;
+    if (curLevel > lateRegLevel) {
+      throw new Error(`레지 마감: ${lateRegLevel}레벨 이후에는 리바이할 수 없습니다.`);
+    }
+  }
+
+  // Monster-style tables grant a distinct rebuy stack (리바이 300만 ≠ 스타트 250만).
+  const rebuyChips = room.config.rebuyStack ?? room.config.startingStack;
   const expected = room.updatedAt;
   const live = room.gameState.handInProgress;
   room.gameState = {
     ...room.gameState,
     seats: room.gameState.seats.map((s) =>
       s.id === playerId
-        ? { ...s, stack: room.config.startingStack, status: live ? ('folded' as const) : ('active' as const) }
+        ? { ...s, stack: rebuyChips, status: live ? ('folded' as const) : ('active' as const) }
         : s,
     ),
   };
