@@ -3,6 +3,11 @@ import { InstallButton } from '@/components/InstallButton';
 
 const FEATURES = [
   {
+    href: '/trainer',
+    title: '🎓 학습하기 (GTO 트레이너)',
+    desc: 'GTO Wizard 트레이너식 랜덤 스팟 드릴 — RFI·vs RFI·vs 3벳 문제를 풀고 정답률·연속 정답·오답 노트로 복습합니다.',
+  },
+  {
     href: '/notes',
     title: '핸드 기록장 · 개인 노트',
     desc: '오프라인 라이브 세션 핸드를 기록하고(포지션·카드·결과·메모) 개인 노트를 남깁니다. 저장은 내 기기에.',
@@ -11,11 +16,6 @@ const FEATURES = [
     href: '/play',
     title: '🃏 멀티플레이 홀덤',
     desc: '공개 로비 또는 방 코드로 친구들과 실시간 노리밋 홀덤. 채팅·핸드 히스토리·에쿼티 분석까지.',
-  },
-  {
-    href: '/equity',
-    title: '에쿼티 계산기',
-    desc: '핸드 vs 핸드 / 핸드 vs 레인지 승률을 몬테카를로로 계산합니다.',
   },
   {
     href: '/ranges',
@@ -39,8 +39,8 @@ const FEATURES = [
   },
   {
     href: '/matchup',
-    title: '레인지 매치업 · 우위 분석',
-    desc: 'GTO Wizard식 레인지 어드밴티지 — 레인지끼리 붙여 에쿼티 분포 곡선과 넛 우위를 보고, ICM 버블 팩터로 필요 콜 에쿼티까지 비교합니다.',
+    title: '레인지 매치업 · 에쿼티 계산기',
+    desc: 'GTO Wizard식 레인지 어드밴티지(에쿼티 분포 곡선·넛 우위·ICM 버블 팩터)에 에쿼티 계산기 탭을 통합 — 핸드 vs 핸드/레인지 승률도 몬테카를로로 계산합니다.',
   },
   {
     href: '/icm',
@@ -48,14 +48,9 @@ const FEATURES = [
     desc: '토너먼트 칩을 상금 기대값으로 환산하고 버블 리스크 프리미엄을 계산합니다.',
   },
   {
-    href: '/analyze',
-    title: '핸드 히스토리 분석',
-    desc: '온라인 핸드 히스토리를 붙여넣거나 스크린샷을 올려 파싱·에쿼티 분석합니다.',
-  },
-  {
     href: '/replay',
-    title: '핸드 리플레이 (WPL식)',
-    desc: '올인 핸드를 입력해 스트리트별 에쿼티(예: 88 vs KK 19.5%)와 승자·배드빗을 분석합니다.',
+    title: '핸드 리플레이 · 히스토리 분석',
+    desc: '올인 핸드를 스트리트별 에쿼티(예: 88 vs KK 19.5%)로 리플레이하고, 히스토리 텍스트·스크린샷(OCR) 분석 탭까지 한 페이지에서 제공합니다.',
   },
   {
     href: '/community',

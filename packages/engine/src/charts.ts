@@ -11,6 +11,7 @@
  */
 
 import { parseRange } from './range.js';
+import { simRfiRange } from './simdata.js';
 
 export type Position = 'UTG' | 'MP' | 'CO' | 'BTN' | 'SB' | 'BB';
 export const POSITIONS_6MAX: Position[] = ['UTG', 'MP', 'CO', 'BTN', 'SB', 'BB'];
@@ -19,6 +20,20 @@ export type GameType = 'cash' | 'mtt';
 export type ActionLine = 'RFI' | 'vs-RFI' | 'RFI-vs-3bet';
 
 export type PreflopAction = 'fold' | 'call' | 'raise';
+
+/**
+ * Where a strategy came from: a hand-authored chart, our own Monte-Carlo
+ * simulation data (RFI at MTT depths), or the Chen-strength heuristic.
+ */
+export type ChartSource = 'chart' | 'heuristic' | 'sim';
+
+/**
+ * MTT stack depths covered by the self-simulation data (rfi-sim.json) that do
+ * NOT have a hand-authored chart — RFI at these depths resolves to `source:
+ * 'sim'`. 100bb is also simulated but keeps the hand chart.
+ */
+export const SIM_BACKED_STACKS = [5, 10, 15, 20, 25, 30, 40, 50, 70] as const;
+export type SimBackedStackBB = (typeof SIM_BACKED_STACKS)[number];
 
 export interface SituationSpec {
   gameType: GameType;
@@ -34,13 +49,13 @@ export interface SituationSpec {
 }
 
 /** Strategy result: per 169-hand label -> action frequencies (summing to 1). */
-export interface ChartStrategy {
+export interface ChartStrategy<S extends ChartSource = ChartSource> {
   /** label -> { fold, call, raise } frequencies. */
   hands: Map<string, Record<PreflopAction, number>>;
   /** Short human description of the spot. */
   label: string;
-  /** Whether this came from a stored chart or a heuristic fallback. */
-  source: 'chart' | 'heuristic';
+  /** Whether this came from a stored chart, sim data or a heuristic fallback. */
+  source: S;
 }
 
 /* ----------------------------------------------------------------------- *
@@ -192,22 +207,67 @@ function heuristicVs3bet(posOrder: number, stackBB: number): Map<string, Record<
 }
 
 /**
- * Resolve a situation to a strategy. Uses stored charts when available and
- * falls back to a Chen-strength heuristic (tightening for deeper stacks and
- * earlier positions) otherwise.
+ * How far (in bb) a requested depth may sit from a simulated depth (or from
+ * the 100bb hand chart) and still use that data instead of the heuristic.
  */
+const SIM_STACK_TOLERANCE_BB = 2;
+
+/**
+ * The self-simulated RFI strategy for a position/depth, or null when the sim
+ * data does not cover the requested depth (within the tolerance) or position.
+ * Labels with simulated EV > 0 open at full frequency; everything else folds.
+ */
+function simRfiStrategy(heroPos: Position, stackBB: number): ChartStrategy | null {
+  if (heroPos === 'BB') return null; // BB never opens
+  let sim: ReturnType<typeof simRfiRange>;
+  try {
+    sim = simRfiRange(heroPos, stackBB);
+  } catch {
+    return null; // no simulated data at all (e.g. stub JSON before gen:preflop)
+  }
+  if (Math.abs(sim.stackBB - stackBB) > SIM_STACK_TOLERANCE_BB) return null;
+  if (sim.labels.length === 0) return null;
+  const hands = new Map<string, Record<PreflopAction, number>>();
+  for (const label of sim.labels) hands.set(label, { fold: 0, call: 0, raise: 1 });
+  const label =
+    sim.model === 'shove-EV'
+      ? `${heroPos} 올인 오픈 (자체 시뮬 푸시/폴드) · ${sim.stackBB}bb`
+      : `${heroPos} 오픈 (자체 시뮬) · ${sim.stackBB}bb`;
+  return { hands, label, source: 'sim' };
+}
+
+/**
+ * Resolve a situation to a strategy. Uses stored charts when available, the
+ * self-simulation data for RFI at MTT depths without a hand-authored chart,
+ * and falls back to a Chen-strength heuristic (tightening for deeper stacks
+ * and earlier positions) otherwise.
+ *
+ * Typing note: the first overload keeps `source` wide ('sim' possible) for
+ * calls at sim-backed literal depths; the second keeps the historical
+ * 'chart' | 'heuristic' type for 100bb-style call sites. At runtime a dynamic
+ * non-literal `stackBB` that lands on a sim-backed depth still returns
+ * `source: 'sim'` — annotate such results as `ChartStrategy` when narrowing
+ * on the source.
+ */
+export function getChart(spec: SituationSpec & { stackBB: SimBackedStackBB }): ChartStrategy;
+export function getChart(spec: SituationSpec): ChartStrategy<'chart' | 'heuristic'>;
 export function getChart(spec: SituationSpec): ChartStrategy {
   const posOrder = POSITIONS_6MAX.indexOf(spec.heroPos);
 
   if (spec.line === 'RFI') {
     const str = RFI_100BB[spec.heroPos];
-    if (str) {
+    // The hand-authored RFI charts are 100bb solutions — only use them there.
+    if (str && Math.abs(spec.stackBB - 100) <= SIM_STACK_TOLERANCE_BB) {
       return {
         hands: pureRaise(parseRange(str)),
         label: `${spec.heroPos} RFI · ${spec.stackBB}bb`,
         source: 'chart',
       };
     }
+    // Other depths: self-simulated RFI data when it covers the depth.
+    const sim = simRfiStrategy(spec.heroPos, spec.stackBB);
+    if (sim) return sim;
+    // No sim coverage -> heuristic fallback below.
   }
 
   if (spec.line === 'vs-RFI' && spec.villainPos) {
