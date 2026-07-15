@@ -2,18 +2,23 @@
  * Self-simulated preflop RFI data (Monte-Carlo chip-EV).
  *
  * The JSON consumed here is produced by our own pipeline
- * (`scripts/gen-preflop.mjs`): for every 6-max open position and stack depth
- * it scores all 169 starting hands with `openRaiseEv` against a
- * position-keyed continue range. Regenerate with:
+ * (`scripts/gen-preflop.mjs`): for every 6-max open position and MTT stack
+ * depth (5-100bb) it scores all 169 starting hands with a depth-aware model —
+ * `openRaiseEv` against a position-keyed continue range at 20bb+ ("raise-EV")
+ * and a push/fold `shoveEv` against a position-keyed calling range at 15bb
+ * and below ("shove-EV"). Regenerate with:
  *
  *   npm run build:engine && npm run gen:preflop -w @gto/engine
  *
  * Honest caveat: this is a chip-EV Monte-Carlo approximation (single caller,
- * heuristic continue ranges and equity realization) — NOT a full GTO
+ * heuristic continue/call ranges and equity realization) — NOT a full GTO
  * equilibrium. See DATA_SOURCES.md at the repo root for full provenance.
  */
 
 import rfiSim from './generated/rfi-sim.json' with { type: 'json' };
+
+/** Which EV model produced a simulated block. */
+export type SimRfiModel = 'shove-EV' | 'raise-EV';
 
 export interface SimRfiMeta {
   generatedAt: string;
@@ -29,6 +34,8 @@ export interface SimRfiMeta {
 
 interface SimRfiFile {
   meta: SimRfiMeta;
+  /** `${position}-${stackBB}` -> which EV model scored that block. */
+  blockMeta?: Record<string, string>;
   /** `${position}-${stackBB}` -> label -> EV in bb (fold = 0). */
   data: Record<string, Record<string, number>>;
 }
@@ -43,6 +50,11 @@ export interface SimRfiRange {
   stackBB: number;
   /** The depth the caller asked for. */
   requestedStackBB: number;
+  /**
+   * EV model behind this block: 'shove-EV' = push/fold (the open is an
+   * all-in), 'raise-EV' = small open raise vs a continue range.
+   */
+  model: SimRfiModel;
   /** Derived RFI range: every label with simulated EV > 0, best EV first. */
   labels: string[];
   /** Simulated open EV (bb) for a label, or undefined if unknown. */
@@ -75,15 +87,23 @@ export function simRfiRange(position: SimPosition | string, stackBB: number): Si
     if (Math.abs(s - stackBB) < Math.abs(nearest - stackBB)) nearest = s;
   }
 
-  const table = file.data[`${position}-${nearest}`];
+  const key = `${position}-${nearest}`;
+  const table = file.data[key];
   const labels = Object.keys(table)
     .filter((l) => table[l] > 0)
     .sort((a, b) => table[b] - table[a]);
+
+  // Per-block model from the JSON; older files without blockMeta fall back to
+  // the pipeline's depth rule (<= 15bb blocks are push/fold).
+  const raw = file.blockMeta?.[key];
+  const model: SimRfiModel =
+    raw === 'shove-EV' || raw === 'raise-EV' ? raw : nearest <= 15 ? 'shove-EV' : 'raise-EV';
 
   return {
     position,
     stackBB: nearest,
     requestedStackBB: stackBB,
+    model,
     labels,
     evOf: (label: string): number | undefined => table[label],
     meta: file.meta,

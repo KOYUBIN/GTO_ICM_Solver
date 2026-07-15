@@ -21,6 +21,7 @@ import {
   type Position,
   type ActionLine,
   type PreflopAction,
+  type ChartStrategy,
 } from '@gto/engine';
 import { ActionGrid } from '@/components/ActionGrid';
 import { RangeGrid } from '@/components/RangeGrid';
@@ -48,6 +49,9 @@ const RECENTS_KEY = 'gto-chart-recents';
 // Approximate heads-up Nash SB-shove percentages (commonly cited reference).
 const NASH_HU_SHOVE: Record<number, number> = { 6: 48, 8: 42, 10: 37, 12: 33, 15: 28, 20: 23 };
 const ALL_LABELS = allGridLabels();
+
+// MTT stack depths covered by the self-simulation pipeline (rfi-sim.json).
+const STACK_PRESETS = [5, 10, 15, 20, 25, 30, 40, 50, 70, 100];
 
 /** Build a real BB-defense continue range vs hero's open, if charted. */
 function bbDefenseRange(heroPos: Position, stackBB: number): Map<string, number> | null {
@@ -102,7 +106,8 @@ export default function ChartsPage() {
     setStackBB(r.stackBB);
   }
 
-  const strategy = useMemo(
+  // Annotated as ChartStrategy: dynamic depths can resolve to source 'sim'.
+  const strategy = useMemo<ChartStrategy>(
     () =>
       getChart({
         gameType: 'cash',
@@ -196,7 +201,7 @@ export default function ChartsPage() {
       <h1>프리플랍 차트 · 전략 + EV</h1>
       <p className="subtitle">
         스팟을 고르면 GTO 전략 그리드를, 핸드를 클릭하면 콤보별 액션 EV를 봅니다. 100bb 6맥스 GTO 근사
-        + 칩EV 근사입니다.
+        + 칩EV 근사이며, RFI는 5~70bb MTT 뎁스를 자체 시뮬 데이터로 커버합니다.
       </p>
 
       {/* Recent spots */}
@@ -299,9 +304,27 @@ export default function ChartsPage() {
               </select>
             </div>
           )}
-          <div>
-            <label>유효 스택 (BB)</label>
-            <input type="number" value={stackBB} onChange={(e) => setStackBB(Number(e.target.value) || 100)} />
+          <div style={{ flexBasis: '100%' }}>
+            <label>유효 스택 (BB) — MTT 뎁스 빠른 선택</label>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+              {STACK_PRESETS.map((s) => (
+                <button
+                  key={s}
+                  className={stackBB === s ? '' : 'secondary'}
+                  style={{ padding: '5px 10px', fontSize: 13, minWidth: 40 }}
+                  onClick={() => setStackBB(s)}
+                >
+                  {s}
+                </button>
+              ))}
+              <input
+                type="number"
+                value={stackBB}
+                onChange={(e) => setStackBB(Number(e.target.value) || 100)}
+                title="직접 입력"
+                style={{ width: 76, padding: '5px 8px', fontSize: 13 }}
+              />
+            </div>
           </div>
           <div>
             <label>레이즈 사이즈 (BB)</label>
@@ -393,11 +416,25 @@ export default function ChartsPage() {
                 <span
                   className="pill"
                   style={{
-                    background: strategy.source === 'chart' ? 'rgba(63,185,80,0.15)' : 'rgba(210,153,34,0.15)',
-                    color: strategy.source === 'chart' ? 'var(--accent)' : 'var(--warn)',
+                    background:
+                      strategy.source === 'chart'
+                        ? 'rgba(63,185,80,0.15)'
+                        : strategy.source === 'sim'
+                          ? 'rgba(88,166,255,0.15)'
+                          : 'rgba(210,153,34,0.15)',
+                    color:
+                      strategy.source === 'chart'
+                        ? 'var(--accent)'
+                        : strategy.source === 'sim'
+                          ? 'var(--blue)'
+                          : 'var(--warn)',
                   }}
                 >
-                  {strategy.source === 'chart' ? '차트 데이터' : '휴리스틱 근사'}
+                  {strategy.source === 'chart'
+                    ? '차트 데이터'
+                    : strategy.source === 'sim'
+                      ? '자체 시뮬 데이터'
+                      : '휴리스틱 근사'}
                 </span>
               </div>
             </div>
@@ -407,11 +444,16 @@ export default function ChartsPage() {
                 4벳=레이즈 축
               </p>
             )}
+            {line === 'RFI' && strategy.source === 'sim' && simCompare?.sim.model === 'shove-EV' && (
+              <p style={{ marginTop: 10, marginBottom: 0, fontSize: 12, color: 'var(--blue)' }}>
+                숏스택 푸시/폴드 모델 — 레이즈 축=올인
+              </p>
+            )}
             <p className="muted" style={{ marginTop: 10 }}>
               셀 색은 GTO 액션 비율(레이즈/콜/폴드 %)대로 칠해집니다. 핸드를 클릭하면 →
             </p>
 
-            {simCompare && (
+            {simCompare && strategy.source !== 'sim' && (
               <div style={{ marginTop: 18, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
                   <h2 style={{ margin: 0, fontSize: 15 }}>🧪 자체 시뮬 오픈 레인지</h2>
@@ -420,12 +462,22 @@ export default function ChartsPage() {
                   </span>
                 </div>
                 <p className="muted" style={{ margin: '6px 0 10px', fontSize: 12 }}>
-                  {heroPos} {simCompare.sim.stackBB}bb — 몬테카를로 칩EV 시뮬(핸드당 2만 회, 총 5,070만
+                  {heroPos} {simCompare.sim.stackBB}bb ({simCompare.sim.model === 'shove-EV' ? '푸시/폴드 올인' : '오픈 레이즈'}{' '}
+                  모델) — 몬테카를로 칩EV 시뮬(핸드당 {simCompare.sim.meta.iterationsPerHand.toLocaleString()}회
                   롤아웃)에서 EV&gt;0인 {simCompare.sim.labels.length}개 라벨. 상위:{' '}
                   {simCompare.top.join(', ')}. 자세한 출처는 DATA_SOURCES.md 참고.
                 </p>
                 <RangeGrid range={simCompare.grid} />
               </div>
+            )}
+            {simCompare && strategy.source === 'sim' && (
+              <p className="muted" style={{ marginTop: 10, marginBottom: 0, fontSize: 12 }}>
+                이 그리드는 자체 시뮬 데이터입니다 —{' '}
+                {simCompare.sim.model === 'shove-EV' ? '올인(푸시/폴드)' : '오픈 레이즈'} 칩EV&gt;0인{' '}
+                {simCompare.sim.labels.length}개 라벨 (핸드당{' '}
+                {simCompare.sim.meta.iterationsPerHand.toLocaleString()}회 몬테카를로 롤아웃). 상위:{' '}
+                {simCompare.top.join(', ')}. 자세한 출처는 DATA_SOURCES.md 참고.
+              </p>
             )}
           </div>
 
@@ -524,7 +576,7 @@ function EquityChart({
   strategy,
   oppRange,
 }: {
-  strategy: ReturnType<typeof getChart>;
+  strategy: ChartStrategy;
   oppRange: Map<string, number>;
 }) {
   const [rows, setRows] = useState<{ label: string; eq: number; weight: number }[] | null>(null);

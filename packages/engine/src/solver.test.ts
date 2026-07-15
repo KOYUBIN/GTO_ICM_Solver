@@ -16,6 +16,52 @@ test('charts: BTN RFI is wider than UTG RFI', () => {
   assert.ok(btn.hands.size > utg.hands.size);
 });
 
+test('charts: 100bb RFI keeps the hand-authored chart, not the sim data', () => {
+  for (const heroPos of ['UTG', 'MP', 'CO', 'BTN', 'SB'] as const) {
+    const s = getChart({ gameType: 'cash', stackBB: 100, heroPos, line: 'RFI' });
+    assert.equal(s.source, 'chart', `${heroPos} 100bb RFI should stay charted`);
+  }
+});
+
+test('charts: RFI at 20bb comes from the self-simulation, BTN wider than UTG', () => {
+  const utg = getChart({ gameType: 'cash', stackBB: 20, heroPos: 'UTG', line: 'RFI' });
+  const btn = getChart({ gameType: 'cash', stackBB: 20, heroPos: 'BTN', line: 'RFI' });
+  assert.equal(utg.source, 'sim');
+  assert.equal(btn.source, 'sim');
+  assert.ok(
+    btn.hands.size > utg.hands.size,
+    `BTN 20bb (${btn.hands.size}) should open wider than UTG 20bb (${utg.hands.size})`,
+  );
+  // Sim strategies are pure open-or-fold and label the spot in Korean.
+  for (const f of btn.hands.values()) {
+    assert.equal(f.raise, 1);
+    assert.equal(f.call, 0);
+  }
+  assert.ok(btn.label.includes('자체 시뮬'), btn.label);
+});
+
+test('charts: 10bb BTN push/fold range is narrower than the 30bb BTN open', () => {
+  const btn10 = getChart({ gameType: 'cash', stackBB: 10, heroPos: 'BTN', line: 'RFI' });
+  const btn30 = getChart({ gameType: 'cash', stackBB: 30, heroPos: 'BTN', line: 'RFI' });
+  assert.equal(btn10.source, 'sim');
+  assert.equal(btn30.source, 'sim');
+  // Shove-model depths are labelled as push/fold all-in opens.
+  assert.ok(btn10.label.includes('푸시/폴드'), btn10.label);
+  assert.ok(!btn30.label.includes('푸시/폴드'), btn30.label);
+  assert.ok(
+    btn10.hands.size < btn30.hands.size,
+    `BTN 10bb shove (${btn10.hands.size}) should be narrower than BTN 30bb open (${btn30.hands.size})`,
+  );
+});
+
+test('charts: RFI depths without sim coverage fall back to the heuristic', () => {
+  const s = getChart({ gameType: 'cash', stackBB: 60, heroPos: 'BTN', line: 'RFI' });
+  assert.equal(s.source, 'heuristic');
+  // BB never opens and has no sim data either.
+  const bb = getChart({ gameType: 'cash', stackBB: 20, heroPos: 'BB', line: 'RFI' });
+  assert.equal(bb.source, 'heuristic');
+});
+
 test('charts: vs-RFI mixes call/3bet and sums to 1', () => {
   const s = getChart({
     gameType: 'cash',
