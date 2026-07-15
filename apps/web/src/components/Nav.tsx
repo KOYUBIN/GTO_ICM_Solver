@@ -17,6 +17,7 @@ const GROUPS: { title: string; links: { href: string; label: string; icon: strin
     title: '솔버 · 전략',
     links: [
       { href: '/solver', label: '포스트플랍 솔버', icon: '🧠' },
+      { href: '/matchup', label: '레인지 매치업', icon: '⚔️' },
       { href: '/charts', label: '프리플랍 차트', icon: '📊' },
       { href: '/ranges', label: '레인지 뷰어', icon: '🎛️' },
       { href: '/pushfold', label: '푸시/폴드', icon: '📈' },
