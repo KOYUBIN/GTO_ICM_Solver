@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { pushFoldAdvice, topPercentRange, allGridLabels, getPreset } from '@gto/engine';
 import { RangeGrid } from '@/components/RangeGrid';
 
@@ -27,6 +27,17 @@ export default function PushFoldPage() {
   const [monsterMode, setMonsterMode] = useState(false);
   const [levelIdx, setLevelIdx] = useState(9); // 기본 L10 (레지 마감 레벨)
   const [chipsStr, setChipsStr] = useState('2500000');
+
+  // 몬스터 허브에서 넘어온 링크(?monster=1&level=&chips=)로 실전 모드 프리필.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('monster') !== '1') return;
+    setMonsterMode(true);
+    const lv = Number(q.get('level'));
+    if (Number.isFinite(lv) && lv >= 0 && lv < MONSTER.levels.length) setLevelIdx(lv);
+    const chips = q.get('chips');
+    if (chips != null && Number(chips) > 0) setChipsStr(String(Math.floor(Number(chips))));
+  }, []);
 
   const lvl = MONSTER.levels[Math.min(levelIdx, MONSTER.levels.length - 1)];
   const chips = Math.max(0, Math.floor(Number(chipsStr) || 0));
