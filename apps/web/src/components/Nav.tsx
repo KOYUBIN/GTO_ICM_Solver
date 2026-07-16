@@ -19,8 +19,7 @@ const GROUPS: { title: string; links: { href: string; label: string; icon: strin
     links: [
       { href: '/solver', label: '포스트플랍 솔버', icon: '🧠' },
       { href: '/matchup', label: '매치업 · 에쿼티', icon: '⚔️' },
-      { href: '/charts', label: '프리플랍 차트', icon: '📊' },
-      { href: '/ranges', label: '레인지 뷰어', icon: '🎛️' },
+      { href: '/charts', label: '프리플랍 차트 · 레인지', icon: '📊' },
       { href: '/pushfold', label: '푸시/폴드', icon: '📈' },
       { href: '/icm', label: 'ICM 계산기', icon: '🏆' },
     ],

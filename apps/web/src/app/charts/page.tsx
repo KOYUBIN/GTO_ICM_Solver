@@ -25,6 +25,7 @@ import {
 } from '@gto/engine';
 import { ActionGrid } from '@/components/ActionGrid';
 import { RangeGrid } from '@/components/RangeGrid';
+import { HandGridPicker } from '@/components/Pickers';
 import { PlayingCards } from '@/components/Cards';
 
 const ACTION_COLORS = [
@@ -39,7 +40,7 @@ const LINES: { value: ActionLine; label: string }[] = [
   { value: 'RFI-vs-3bet', label: 'vs 3벳 (오픈 후 대응)' },
 ];
 
-type Tab = 'ev' | 'equity' | 'validate';
+type Tab = 'ev' | 'equity' | 'validate' | 'ranges';
 
 /** Minimal state needed to reproduce a viewed spot. */
 type RecentSpot = { heroPos: Position; villainPos: Position; line: ActionLine; stackBB: number };
@@ -98,6 +99,12 @@ export default function ChartsPage() {
       // localStorage unavailable (SSR/private mode) — ignore.
     }
   }, [heroPos, villainPos, line, stackBB]);
+
+  // 구 /ranges URL 통합: ?tab=ranges 로 들어오면 레인지 뷰어 탭을 엽니다.
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get('tab');
+    if (t === 'ranges' || t === 'equity' || t === 'validate' || t === 'ev') setTab(t as Tab);
+  }, []);
 
   function restoreSpot(r: RecentSpot) {
     setHeroPos(r.heroPos);
@@ -386,10 +393,11 @@ export default function ChartsPage() {
       </div>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
         {([
           ['ev', '전략 + EV'],
           ['equity', '에쿼티 차트'],
+          ['ranges', '레인지 뷰어'],
           ['validate', '검증'],
         ] as [Tab, string][]).map(([t, lbl]) => (
           <button key={t} className={tab === t ? '' : 'secondary'} onClick={() => setTab(t)}>
@@ -564,6 +572,8 @@ export default function ChartsPage() {
       )}
 
       {tab === 'equity' && <EquityChart strategy={strategy} oppRange={continueRange} />}
+
+      {tab === 'ranges' && <RangeViewer />}
 
       {tab === 'validate' && <Validation />}
     </div>
@@ -764,6 +774,87 @@ function Validation() {
         * 셔브가 단조적으로 넓어지고(스택↓) 프리미엄은 항상 셔브, 트래시는 폴드인지(질적 검증) + Nash
         참고치와의 편차(양적 러프 검증)를 함께 봅니다. 참고치는 통용되는 헤즈업 Nash 근사값입니다.
       </p>
+    </div>
+  );
+}
+
+const RANGE_PRESETS: { name: string; range: string }[] = [
+  { name: 'UTG 오픈 (~15%)', range: '55+, ATs+, KQs, QJs, JTs, AQo+, KQo' },
+  {
+    name: 'BTN 오픈 (~45%)',
+    range: '22+, A2s+, K5s+, Q8s+, J8s+, T8s+, 97s+, 86s+, 75s+, 65s, 54s, A7o+, K9o+, Q9o+, J9o+, T9o',
+  },
+  {
+    name: 'BB 콜 vs BTN',
+    range: '22+, A2s+, K2s+, Q5s+, J7s+, T7s+, 96s+, 85s+, 74s+, 64s+, 53s+, A2o+, K7o+, Q9o+, J9o+, T9o',
+  },
+  { name: '3벳 밸류 (~4%)', range: 'QQ+, AKs, AKo' },
+];
+
+/** 자유 레인지 뷰어 (구 /ranges 페이지 — 차트 탭으로 통합). */
+function RangeViewer() {
+  const [input, setInput] = useState(RANGE_PRESETS[0].range);
+  const [showPicker, setShowPicker] = useState(false);
+
+  const { range, percent, error } = useMemo(() => {
+    try {
+      const r = parseRange(input);
+      return { range: r, percent: rangePercent(r), error: '' };
+    } catch (e) {
+      return { range: new Map<string, number>(), percent: 0, error: (e as Error).message };
+    }
+  }, [input]);
+
+  return (
+    <div>
+      <div className="card">
+        <p className="muted" style={{ marginTop: 0 }}>
+          손패 범위를 직접 입력해 13x13 그리드로 봅니다. 표기법: <code>22+</code>, <code>ATs+</code>,{' '}
+          <code>A5s-A2s</code>, <code>AKo</code>, 가중치 <code>AKs:0.5</code>.
+        </p>
+        <label>레인지</label>
+        <textarea rows={3} value={input} onChange={(e) => setInput(e.target.value)} />
+        <div style={{ marginTop: 8 }}>
+          <button
+            className="secondary"
+            onClick={() => setShowPicker((v) => !v)}
+            style={{ padding: '4px 12px', fontSize: 13 }}
+          >
+            {showPicker ? '그리드 선택 닫기' : '그리드로 선택'}
+          </button>
+        </div>
+        {showPicker && (
+          <div style={{ marginTop: 10 }}>
+            <HandGridPicker value={input} onChange={setInput} />
+          </div>
+        )}
+        <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {RANGE_PRESETS.map((p) => (
+            <button key={p.name} className="secondary" onClick={() => setInput(p.range)}>
+              {p.name}
+            </button>
+          ))}
+        </div>
+        {error && (
+          <p className="muted" style={{ color: 'var(--danger)', marginTop: 10 }}>
+            {error}
+          </p>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="stat">
+          <span>핸드 비중</span>
+          <span className="val">{percent.toFixed(1)}%</span>
+        </div>
+        <div className="stat">
+          <span>그리드 셀</span>
+          <span className="val">{range.size} / 169</span>
+        </div>
+        <div style={{ marginTop: 16 }}>
+          <RangeGrid range={range} />
+        </div>
+      </div>
     </div>
   );
 }
