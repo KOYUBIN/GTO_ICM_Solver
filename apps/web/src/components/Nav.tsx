@@ -31,6 +31,7 @@ const GROUPS: { title: string; links: { href: string; label: string; icon: strin
       { href: '/trainer', label: '학습하기', icon: '🎓' },
       { href: '/replay', label: '리플레이 · 분석', icon: '🎬' },
       { href: '/notes', label: '핸드 기록장', icon: '📓' },
+      { href: '/glossary', label: '용어 사전', icon: '📖' },
     ],
   },
 ];
