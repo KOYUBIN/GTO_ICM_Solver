@@ -10,6 +10,7 @@ const GROUPS: { title: string; links: { href: string; label: string; icon: strin
     title: '플레이',
     links: [
       { href: '/play', label: '멀티플레이 홀덤', icon: '🃏' },
+      { href: '/monster', label: '몬스터 게임', icon: '🎰' },
       { href: '/community', label: '커뮤니티', icon: '💬' },
     ],
   },
