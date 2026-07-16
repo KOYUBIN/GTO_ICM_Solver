@@ -6,6 +6,7 @@ import {
   riskPremium,
   bubbleFactor,
   dealCalc,
+  icmShoveEv,
   payoutsFor,
   PAYOUT_PRESETS,
   MONSTER_GAME,
@@ -135,6 +136,47 @@ export default function IcmPage() {
     const rp = riskPremium(stacks, fractions, hero, villain, amount);
     return { bf, rp };
   }, [canCalc, stacks, fractions, hero, villain]);
+
+  // ---- ICM 셔브 판단 (퍼스트-인 올인 모델) ----
+  const [shoveHand, setShoveHand] = useState('AKo');
+  const [callRange, setCallRange] = useState('88+, ATs+, AJo+, KQs');
+  const [shoveBBStr, setShoveBBStr] = useState('200');
+  const [shoveAnteStr, setShoveAnteStr] = useState('0');
+
+  const shove = useMemo(() => {
+    if (!canCalc || stacks[hero] <= 0) return null;
+    const bb = Math.max(0, Number(shoveBBStr) || 0);
+    const ante = Math.max(0, Number(shoveAnteStr) || 0);
+    // 히어로를 제외한 나머지 플레이어를 (순서대로) 콜러로 두고 같은 콜 레인지 적용.
+    const callerRanges = players
+      .map((_, i) => i)
+      .filter((i) => i !== hero && stacks[i] > 0)
+      .map((idx) => ({ idx, range: callRange }));
+    if (!callerRanges.length) return null;
+    try {
+      const r = icmShoveEv({
+        stacks,
+        payouts: fractions,
+        heroIdx: hero,
+        heroHand: shoveHand.trim(),
+        callerRanges,
+        sb: Math.floor(bb / 2),
+        bb,
+        ante,
+        iterations: 3000,
+        seed: 2026,
+      });
+      return { ...r, error: null as string | null };
+    } catch (e) {
+      return { error: (e as Error).message } as {
+        error: string;
+        evFoldICM?: number;
+        evShoveICM?: number;
+        deltaICM?: number;
+        shoveOk?: boolean;
+      };
+    }
+  }, [canCalc, stacks, fractions, hero, players, shoveHand, callRange, shoveBBStr, shoveAnteStr]);
 
   // ---- 핸들러 ----
   function applyPreset(id: string) {
@@ -544,6 +586,88 @@ export default function IcmPage() {
           <p className="muted" style={{ marginBottom: 0, marginTop: 14 }}>
             히어로와 빌런 모두 0보다 큰 스택이 필요합니다.
           </p>
+        )}
+      </div>
+
+      {/* 5. ICM 셔브 판단 */}
+      <div className="card">
+        <h2>ICM 셔브 판단</h2>
+        <p className="muted" style={{ marginTop: 0 }}>
+          히어로(위에서 선택)가 퍼스트-인으로 올인할 때 ICM 기준 셔브 EV와 폴드 EV를 비교합니다.
+          뒤 플레이어들이 아래 콜 레인지로 콜한다고 가정합니다 (몬테카를로 근사).
+        </p>
+        <div className="row">
+          <div>
+            <label>히어로 핸드 (예: AKo, 99, AsKh)</label>
+            <input value={shoveHand} onChange={(e) => setShoveHand(e.target.value)} />
+          </div>
+          <div>
+            <label>상대 콜 레인지</label>
+            <input value={callRange} onChange={(e) => setCallRange(e.target.value)} />
+          </div>
+        </div>
+        <div className="row">
+          <div>
+            <label>빅블라인드 (칩)</label>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={shoveBBStr}
+              onChange={(e) => setShoveBBStr(e.target.value)}
+            />
+          </div>
+          <div>
+            <label>앤티 (칩, 1인당)</label>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={shoveAnteStr}
+              onChange={(e) => setShoveAnteStr(e.target.value)}
+            />
+          </div>
+        </div>
+
+        {shove && shove.error && (
+          <p className="muted" style={{ marginTop: 14, marginBottom: 0, color: 'var(--warn)' }}>
+            {shove.error} — 핸드/레인지 표기를 확인하세요.
+          </p>
+        )}
+        {shove && !shove.error && shove.evFoldICM != null && (
+          <div style={{ marginTop: 14 }}>
+            <div className="stat">
+              <span>권장</span>
+              <span className="val">
+                <span className={`pill ${shove.shoveOk ? 'push' : 'fold'}`}>
+                  {shove.shoveOk ? '셔브' : '폴드'}
+                </span>
+              </span>
+            </div>
+            <div className="stat">
+              <span>셔브 ICM 지분</span>
+              <span className="val">{((shove.evShoveICM ?? 0) * 100).toFixed(2)}%</span>
+            </div>
+            <div className="stat">
+              <span>폴드 ICM 지분</span>
+              <span className="val">{((shove.evFoldICM ?? 0) * 100).toFixed(2)}%</span>
+            </div>
+            <div className="stat">
+              <span>셔브 − 폴드 (ΔICM)</span>
+              <span
+                className="val"
+                style={{ color: (shove.deltaICM ?? 0) > 0 ? 'var(--accent)' : 'var(--warn)' }}
+              >
+                {(shove.deltaICM ?? 0) >= 0 ? '+' : ''}
+                {((shove.deltaICM ?? 0) * 100).toFixed(3)}%p
+                {prizePool > 0 ? ` (${fmtAmount((shove.deltaICM ?? 0) * prizePool)})` : ''}
+              </span>
+            </div>
+            <p className="muted" style={{ marginBottom: 0 }}>
+              ΔICM &gt; 0이면 셔브가 폴드보다 ICM상 이득입니다. 상대 콜 레인지를 넓히면 셔브 가치가
+              내려갑니다 — 레인지를 조절하며 임계점을 찾아보세요.
+            </p>
+          </div>
         )}
       </div>
     </div>
