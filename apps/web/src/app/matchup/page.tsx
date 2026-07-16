@@ -534,7 +534,7 @@ function MatchupAnalysisTab() {
     if (top.v - second.v < 0.02) {
       return `넛 우위가 비슷합니다 (${fmt(top.v)} vs ${fmt(second.v)}) — 스몰 벳·체크 위주의 신중한 전략이 무난합니다.`;
     }
-    return `${result.names[top.i]}이(가) 넛 우위 (${fmt(top.v)} vs ${fmt(second.v)}) — 폴라라이즈드 벳 유리.`;
+    return `${result.names[top.i]}이(가) 넛 우위 (${fmt(top.v)} vs ${fmt(second.v)}) — 강한 패·블러프로 크게 베팅(폴라라이즈드)이 유리.`;
   })();
 
   const icmCompare = (() => {
@@ -657,10 +657,11 @@ function MatchupAnalysisTab() {
 
   return (
     <div className="container">
-      <h1>레인지 매치업 · 우위 분석</h1>
+      <h1>레인지 매치업 · 누가 유리한가</h1>
       <p className="subtitle">
-        GTO Wizard식 레인지 어드밴티지 분석 — 포지션 차트(또는 직접 입력) 레인지끼리 붙여 레인지 에쿼티,
-        에쿼티 분포 곡선, 넛 우위를 계산합니다. 2~4명 멀티웨이와 프리플랍(보드 0장)도 지원합니다.
+        두 사람(또는 여럿)의 손패 범위를 붙여, 누가 유리한지 계산합니다 — 전체 승률(에쿼티), 승률 분포
+        곡선(강한 패가 얼마나 많은지), 넛(최강 패) 우위. 2~4명과 프리플랍(공용카드 0장)도 됩니다. 모르는
+        용어는 상단 메뉴 &lsquo;용어 사전&rsquo; 참고.
       </p>
 
       <div className="card">
