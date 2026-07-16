@@ -28,16 +28,46 @@ export default function PushFoldPage() {
   const [levelIdx, setLevelIdx] = useState(9); // 기본 L10 (레지 마감 레벨)
   const [chipsStr, setChipsStr] = useState('2500000');
 
-  // 몬스터 허브에서 넘어온 링크(?monster=1&level=&chips=)로 실전 모드 프리필.
+  const [copied, setCopied] = useState(false);
+
+  // 공유 링크(?hand=&bb=&behind=, 또는 몬스터 ?monster=1&level=&chips=)로 프리필.
   useEffect(() => {
     const q = new URLSearchParams(window.location.search);
-    if (q.get('monster') !== '1') return;
-    setMonsterMode(true);
-    const lv = Number(q.get('level'));
-    if (Number.isFinite(lv) && lv >= 0 && lv < MONSTER.levels.length) setLevelIdx(lv);
-    const chips = q.get('chips');
-    if (chips != null && Number(chips) > 0) setChipsStr(String(Math.floor(Number(chips))));
+    const h = q.get('hand');
+    if (h) setHand(h.trim());
+    const bb = Number(q.get('bb'));
+    if (Number.isFinite(bb) && bb >= 1 && bb <= 25) setStackBB(Math.round(bb));
+    const behind = Number(q.get('behind'));
+    if (Number.isFinite(behind) && behind >= 1 && behind <= 8) setPlayersBehind(Math.round(behind));
+    if (q.get('monster') === '1') {
+      setMonsterMode(true);
+      const lv = Number(q.get('level'));
+      if (Number.isFinite(lv) && lv >= 0 && lv < MONSTER.levels.length) setLevelIdx(lv);
+      const chips = q.get('chips');
+      if (chips != null && Number(chips) > 0) setChipsStr(String(Math.floor(Number(chips))));
+    }
   }, []);
+
+  function copyShareLink() {
+    const q = new URLSearchParams();
+    q.set('hand', hand);
+    if (monsterMode) {
+      q.set('monster', '1');
+      q.set('level', String(levelIdx));
+      q.set('chips', String(chips));
+    } else {
+      q.set('bb', String(stackBB));
+    }
+    q.set('behind', String(playersBehind));
+    const url = `${window.location.origin}${window.location.pathname}?${q.toString()}`;
+    const done = () => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    };
+    navigator.clipboard?.writeText(url).then(done, () => {
+      window.prompt('이 링크를 복사하세요', url);
+    });
+  }
 
   const lvl = MONSTER.levels[Math.min(levelIdx, MONSTER.levels.length - 1)];
   const chips = Math.max(0, Math.floor(Number(chipsStr) || 0));
@@ -65,6 +95,11 @@ export default function PushFoldPage() {
         숏스택 올인 차트 근사. 스택 깊이와 뒤에 남은 플레이어 수로 셔브 레인지를 좁힙니다. (Nash 정확
         해가 아닌 실용적 근사)
       </p>
+      <div style={{ marginBottom: 14 }}>
+        <button className="secondary" onClick={copyShareLink}>
+          {copied ? '✓ 링크 복사됨' : '🔗 이 스팟 링크 복사'}
+        </button>
+      </div>
 
       {/* 몬스터 게임 실전 모드 */}
       <div className="card" style={{ border: monsterMode ? '2px solid var(--warn)' : undefined }}>
