@@ -314,10 +314,10 @@ export default function IcmPage() {
 
   return (
     <div className="container">
-      <h1>ICM 계산기</h1>
+      <h1>ICM 계산기 (칩 → 상금 환산)</h1>
       <p className="subtitle">
-        Malmuth-Harville 모델로 칩 스택을 상금 기대값으로 환산합니다. 상금 구조 프리셋, 칩찹(chip-chop)
-        비교, 버블 팩터까지 한 번에 확인하세요.
+        내 칩이 실제로 상금(돈)으로 얼마인지 계산합니다(ICM). 상금 구조 프리셋, 딜(상금 나누기) 비교,
+        버블 압박까지 한 번에 확인하세요. 모르는 용어는 상단 메뉴의 &lsquo;용어 사전&rsquo;에 있어요.
       </p>
 
       {/* 0. 몬스터 게임 (파이널 나인) 빠른 설정 */}
@@ -665,10 +665,10 @@ export default function IcmPage() {
 
       {/* 5. ICM 셔브 판단 */}
       <div className="card">
-        <h2>ICM 셔브 판단</h2>
+        <h2>ICM 셔브(올인) 판단</h2>
         <p className="muted" style={{ marginTop: 0 }}>
-          히어로(위에서 선택)가 퍼스트-인으로 올인할 때 ICM 기준 셔브 EV와 폴드 EV를 비교합니다.
-          뒤 플레이어들이 아래 콜 레인지로 콜한다고 가정합니다 (몬테카를로 근사).
+          내(히어로, 위에서 선택)가 처음으로 올인할 때, 상금 가치(ICM) 기준으로 올인이 폴드보다 이득인지
+          비교합니다. 뒤 사람들이 아래 &lsquo;콜 레인지&rsquo;로 받아준다고 가정합니다 (무작위 시뮬레이션 근사).
         </p>
         <div className="row">
           <div>
@@ -719,15 +719,15 @@ export default function IcmPage() {
               </span>
             </div>
             <div className="stat">
-              <span>셔브 ICM 지분</span>
+              <span>올인 시 상금 가치</span>
               <span className="val">{((shove.evShoveICM ?? 0) * 100).toFixed(2)}%</span>
             </div>
             <div className="stat">
-              <span>폴드 ICM 지분</span>
+              <span>폴드 시 상금 가치</span>
               <span className="val">{((shove.evFoldICM ?? 0) * 100).toFixed(2)}%</span>
             </div>
             <div className="stat">
-              <span>셔브 − 폴드 (ΔICM)</span>
+              <span>차이 (올인 − 폴드)</span>
               <span
                 className="val"
                 style={{ color: (shove.deltaICM ?? 0) > 0 ? 'var(--accent)' : 'var(--warn)' }}
@@ -738,8 +738,8 @@ export default function IcmPage() {
               </span>
             </div>
             <p className="muted" style={{ marginBottom: 0 }}>
-              ΔICM &gt; 0이면 셔브가 폴드보다 ICM상 이득입니다. 상대 콜 레인지를 넓히면 셔브 가치가
-              내려갑니다 — 레인지를 조절하며 임계점을 찾아보세요.
+              차이가 + 이면 올인이 폴드보다 상금상 이득입니다. 상대가 받아주는 범위(콜 레인지)를 넓히면
+              올인 가치가 내려갑니다 — 범위를 조절하며 경계를 찾아보세요.
             </p>
           </div>
         )}
