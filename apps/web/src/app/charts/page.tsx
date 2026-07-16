@@ -205,10 +205,11 @@ export default function ChartsPage() {
 
   return (
     <div className="container" style={{ maxWidth: 1180 }}>
-      <h1>프리플랍 차트 · 전략 + EV</h1>
+      <h1>프리플랍 차트 · 전략 + 기대이득</h1>
       <p className="subtitle">
-        스팟을 고르면 GTO 전략 그리드를, 핸드를 클릭하면 콤보별 액션 EV를 봅니다. 100bb 6맥스 GTO 근사
-        + 칩EV 근사이며, RFI는 5~70bb MTT 뎁스를 자체 시뮬 데이터로 커버합니다.
+        상황을 고르면 권장 전략 그리드를, 손패를 클릭하면 그 패의 액션별 기대이득(EV)을 봅니다. 100bb
+        6인 테이블 기준 근사이며, 처음 레이즈(RFI)는 5~70BB 토너먼트 스택까지 자체 시뮬레이션 데이터로
+        커버합니다. &lsquo;레인지 뷰어&rsquo; 탭에서 직접 입력한 범위도 볼 수 있어요.
       </p>
 
       {/* Recent spots */}
