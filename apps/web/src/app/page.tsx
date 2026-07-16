@@ -37,13 +37,8 @@ const GROUPS: { title: string; items: Feature[] }[] = [
       },
       {
         href: '/charts',
-        title: '프리플랍 차트 · 상황 선택기',
-        desc: 'GTO Wizard 스타일로 스팟을 골라 RFI·3벳 레인지와 믹스를 봅니다.',
-      },
-      {
-        href: '/ranges',
-        title: '레인지 뷰어',
-        desc: '13x13 그리드로 레인지를 시각화하고 콤보 수와 비중을 확인합니다.',
+        title: '프리플랍 차트 · 레인지 뷰어',
+        desc: '상황을 골라 RFI·3벳 레인지와 믹스를 보고, 레인지 뷰어 탭으로 직접 입력한 범위도 시각화합니다.',
       },
       {
         href: '/pushfold',
