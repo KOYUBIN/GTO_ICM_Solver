@@ -64,6 +64,51 @@ export function icm(stacks: number[], payouts: number[]): IcmResult {
   return { equities, finishProb };
 }
 
+/** A final-table deal proposal, one number per remaining player. */
+export interface DealResult {
+  /** ICM (Malmuth-Harville) fair share — same order as `stacks`. */
+  icm: number[];
+  /** Chip-count chop with a min-cash floor — same order as `stacks`. */
+  chipChop: number[];
+  /** Total prize money being divided among the remaining players. */
+  totalPrize: number;
+  /** The locked min-cash floor each player is guaranteed in the chip chop. */
+  floor: number;
+}
+
+/**
+ * Final-table deal calculator. Given the remaining players' `stacks` and the
+ * `payouts` ladder (place 0 = first), returns two common ways to split the
+ * money that's still in play:
+ *
+ * - **ICM**: each player's Malmuth-Harville tournament equity (the "fair"
+ *   split most solvers quote).
+ * - **Chip chop**: each player locks the smallest still-contested prize as a
+ *   floor, then the remainder is divided in proportion to chips. Simpler and
+ *   more chip-leader-friendly than ICM.
+ *
+ * Only the top-`k` prizes matter, where `k` = number of remaining players, and
+ * both methods sum to exactly that contested total.
+ */
+export function dealCalc(stacks: number[], payouts: number[]): DealResult {
+  const k = stacks.length;
+  const contested = payouts.slice(0, k);
+  const totalPrize = contested.reduce((s, p) => s + (p ?? 0), 0);
+  // The floor is the smallest prize still being contested (k-th place money).
+  const floor = k > 0 ? (contested[k - 1] ?? 0) : 0;
+  const totalChips = stacks.reduce((s, c) => s + Math.max(0, c), 0);
+  const leftover = totalPrize - floor * k;
+
+  const chipChop = stacks.map((c) => {
+    const share = totalChips > 0 ? Math.max(0, c) / totalChips : 1 / k;
+    return floor + share * leftover;
+  });
+
+  const icmShare = icm(stacks, payouts).equities;
+
+  return { icm: icmShare, chipChop, totalPrize, floor };
+}
+
 /**
  * ICM risk premium for a hero shove/call.
  *

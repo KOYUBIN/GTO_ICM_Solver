@@ -5,6 +5,7 @@ import {
   icm,
   riskPremium,
   bubbleFactor,
+  dealCalc,
   payoutsFor,
   PAYOUT_PRESETS,
   MONSTER_GAME,
@@ -114,6 +115,12 @@ export default function IcmPage() {
     if (!canCalc) return null;
     return icm(stacks, fractions);
   }, [canCalc, stacks, fractions]);
+
+  // 딜 계산: 실제 상금(₩) 기준 ICM vs 플로어 있는 칩찹(chip-chop).
+  const deal = useMemo(() => {
+    if (!canCalc || prizePool <= 0) return null;
+    return dealCalc(stacks, fractions.map((f) => f * prizePool));
+  }, [canCalc, stacks, fractions, prizePool]);
 
   // ---- 버블 팩터 (히어로/빌런 인덱스는 인원 변경 시 안전하게 클램프) ----
   const n = players.length;
@@ -396,7 +403,14 @@ export default function IcmPage() {
       {/* 3. 결과 테이블 */}
       {result ? (
         <div className="card">
-          <h2>ICM 결과 — 칩찹 비교</h2>
+          <h2>ICM 결과 — 딜 계산기 (ICM vs 칩찹)</h2>
+          {deal && (
+            <p className="muted" style={{ marginTop: 0 }}>
+              지금 딜하면 각자 받는 금액입니다. 분배 대상 상금{' '}
+              <strong>{fmtAmount(deal.totalPrize)}</strong> · 각자 보장(플로어){' '}
+              <strong>{fmtAmount(deal.floor)}</strong>.
+            </p>
+          )}
           <div className="table-scroll">
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
               <thead>
@@ -415,7 +429,8 @@ export default function IcmPage() {
                   const eq = result.equities[i]; // 상금 풀 분수
                   const stackShare = totalChips > 0 ? stacks[i] / totalChips : 0;
                   const icmPrize = eq * prizePool;
-                  const chopPrize = stackShare * prizePool;
+                  // 플로어 있는 칩찹(실제 딜 방식); 프라이즈풀 0이면 단순 비례로 폴백.
+                  const chopPrize = deal ? deal.chipChop[i] : stackShare * prizePool;
                   const diff = icmPrize - chopPrize;
                   const rel = eq - stackShare;
                   const better = rel > 0.001;
@@ -447,8 +462,9 @@ export default function IcmPage() {
             </table>
           </div>
           <p className="muted" style={{ marginBottom: 0 }}>
-            칩찹(chip-chop)은 스택 비율 그대로 상금을 나누는 단순 분배입니다. 숏스택은 보통 ICM이
-            유리(생존 가치 반영)하고, 빅스택은 칩찹이 유리합니다 — 딜 협상 시 참고하세요.
+            칩찹(chip-chop)은 각자 최소 상금(플로어)을 먼저 확보한 뒤 남는 상금을 스택 비율로 나누는
+            실제 딜 방식입니다. 숏스택은 보통 ICM이 유리(생존 가치 반영)하고, 빅스택은 칩찹이 유리합니다.
+            현실에서는 두 값 사이에서 협상하는 경우가 많습니다 — 파이널 나인 딜 시 참고하세요.
           </p>
         </div>
       ) : (
