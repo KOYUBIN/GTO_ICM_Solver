@@ -251,7 +251,10 @@ export default function MonsterPage() {
         </div>
         <p className="muted" style={{ marginBottom: 0 }}>
           {diag.zone.advice}. 레드/데드 존이면{' '}
-          <Link href="/pushfold">푸시/폴드 차트</Link>에서 정확한 셔브 레인지를 확인하세요.
+          <Link href={`/pushfold?monster=1&level=${levelIdx}&chips=${Math.round(diag.chips)}`}>
+            푸시/폴드 차트
+          </Link>
+          에서 정확한 셔브 레인지를 확인하세요.
         </p>
       </div>
 
@@ -383,7 +386,11 @@ export default function MonsterPage() {
             <h3 style={{ margin: 0 }}>🏆 ICM · 딜 계산기</h3>
             <p style={{ margin: '4px 0 0' }}>파이널 나인 딜(칩찹/ICM)과 버블 팩터 계산</p>
           </Link>
-          <Link href="/pushfold" className="feature" style={{ padding: '10px 14px', flex: '1 1 220px' }}>
+          <Link
+            href={`/pushfold?monster=1&level=${levelIdx}&chips=${Math.round(diag.chips)}`}
+            className="feature"
+            style={{ padding: '10px 14px', flex: '1 1 220px' }}
+          >
             <h3 style={{ margin: 0 }}>📈 실전 셔브 차트</h3>
             <p style={{ margin: '4px 0 0' }}>칩·레벨 → 유효 BB·M → 푸시/폴드 판단</p>
           </Link>
