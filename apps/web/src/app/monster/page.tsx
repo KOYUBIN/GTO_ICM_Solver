@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   getPreset,
@@ -25,10 +25,50 @@ function minsLabel(min: number): string {
   return h > 0 ? `${h}시간 ${m}분` : `${m}분`;
 }
 
+/** seconds → "m:ss". */
+function mmss(totalSec: number): string {
+  const s = Math.max(0, Math.round(totalSec));
+  return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
+}
+
+const CLOCK_KEY = 'monster-clock-start';
+
 export default function MonsterPage() {
-  // 라이브 레벨: 경과 분(수동 입력) → 현재 레벨.
+  // 라이브 레벨: 라이브 클럭(시작 시각 저장) 또는 수동 경과 분.
   const [elapsedStr, setElapsedStr] = useState('0');
-  const elapsed = Math.max(0, Number(elapsedStr) || 0);
+  const [startAt, setStartAt] = useState<number | null>(null);
+  const [now, setNow] = useState<number | null>(null);
+
+  // 저장된 클럭 복원.
+  useEffect(() => {
+    const s = localStorage.getItem(CLOCK_KEY);
+    if (s && Number(s) > 0) setStartAt(Number(s));
+  }, []);
+
+  // 클럭 실행 중이면 1초마다 갱신.
+  useEffect(() => {
+    if (startAt == null) return;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [startAt]);
+
+  const clockRunning = startAt != null && now != null;
+  const elapsedSec = clockRunning ? Math.max(0, (now - startAt) / 1000) : null;
+  const elapsed = clockRunning ? elapsedSec! / 60 : Math.max(0, Number(elapsedStr) || 0);
+
+  function startClock() {
+    const t = Date.now();
+    localStorage.setItem(CLOCK_KEY, String(t));
+    setStartAt(t);
+    setNow(t);
+  }
+  function stopClock() {
+    localStorage.removeItem(CLOCK_KEY);
+    setStartAt(null);
+    setNow(null);
+  }
+
   const levelIdx = Math.min(
     MONSTER.levels.length - 1,
     Math.floor(elapsed / MONSTER.levelMinutes),
@@ -37,6 +77,11 @@ export default function MonsterPage() {
   const next = levelIdx + 1 < MONSTER.levels.length ? MONSTER.levels[levelIdx + 1] : null;
   const intoLevel = elapsed - levelIdx * MONSTER.levelMinutes;
   const toNext = Math.max(0, MONSTER.levelMinutes - intoLevel);
+  const isLastLevel = levelIdx === MONSTER.levels.length - 1;
+  // 라이브 클럭이면 초 단위 카운트다운.
+  const secToNext = clockRunning
+    ? Math.max(0, MONSTER.levelMinutes * 60 - (elapsedSec! - levelIdx * MONSTER.levelMinutes * 60))
+    : null;
   const regClosed = MONSTER.lateRegLevel != null && cur.level > MONSTER.lateRegLevel;
 
   // 상금 계산.
@@ -63,25 +108,41 @@ export default function MonsterPage() {
       {/* 라이브 레벨 */}
       <div className="card" style={{ border: '2px solid var(--warn)' }}>
         <h2>라이브 레벨</h2>
-        <div className="row">
-          <div>
-            <label>토너먼트 경과 시간 (분)</label>
-            <input
-              type="number"
-              min={0}
-              step={1}
-              value={elapsedStr}
-              onChange={(e) => setElapsedStr(e.target.value)}
-            />
-            <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {[0, 20, 30, 60, 90].map((m) => (
-                <button key={m} className="secondary preset" onClick={() => setElapsedStr(String(m))}>
-                  {m}분
-                </button>
-              ))}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          {clockRunning ? (
+            <button onClick={stopClock} style={{ background: 'var(--warn)' }}>
+              ⏹ 클럭 정지 / 리셋
+            </button>
+          ) : (
+            <button onClick={startClock}>▶ 지금 시작 (라이브 클럭)</button>
+          )}
+          <span className="muted">
+            {clockRunning
+              ? `실행 중 · 경과 ${minsLabel(elapsed)}`
+              : '시작 시각을 저장하면 레벨이 자동으로 진행됩니다.'}
+          </span>
+        </div>
+        {!clockRunning && (
+          <div className="row" style={{ marginTop: 12 }}>
+            <div>
+              <label>토너먼트 경과 시간 (분) — 수동</label>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={elapsedStr}
+                onChange={(e) => setElapsedStr(e.target.value)}
+              />
+              <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {[0, 20, 30, 60, 90].map((m) => (
+                  <button key={m} className="secondary preset" onClick={() => setElapsedStr(String(m))}>
+                    {m}분
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
+        )}
         <div style={{ marginTop: 12 }}>
           <div className="stat">
             <span>현재 레벨</span>
@@ -92,7 +153,21 @@ export default function MonsterPage() {
           </div>
           <div className="stat">
             <span>이 레벨 종료까지</span>
-            <span className="val">{next ? minsLabel(toNext) : '최종 레벨'}</span>
+            <span
+              className="val"
+              style={{
+                color:
+                  clockRunning && secToNext != null && secToNext <= 60 && !isLastLevel
+                    ? 'var(--warn)'
+                    : undefined,
+              }}
+            >
+              {isLastLevel
+                ? '최종 레벨'
+                : clockRunning && secToNext != null
+                  ? mmss(secToNext)
+                  : minsLabel(toNext)}
+            </span>
           </div>
           {next && (
             <div className="stat">
