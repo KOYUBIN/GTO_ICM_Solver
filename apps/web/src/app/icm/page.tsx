@@ -7,6 +7,7 @@ import {
   bubbleFactor,
   dealCalc,
   icmShoveEv,
+  allGridLabels,
   payoutsFor,
   PAYOUT_PRESETS,
   MONSTER_GAME,
@@ -14,6 +15,7 @@ import {
   monsterPrizePool,
   monsterPayouts,
 } from '@gto/engine';
+import { RangeGrid } from '@/components/RangeGrid';
 
 const CUSTOM_ID = 'custom';
 const MAX_PLAYERS = 10;
@@ -177,6 +179,49 @@ export default function IcmPage() {
       };
     }
   }, [canCalc, stacks, fractions, hero, players, shoveHand, callRange, shoveBBStr, shoveAnteStr]);
+
+  // 전체 169핸드 ICM 셔브 레인지 (버튼으로 계산 — 몬테카를로라 다소 무거움).
+  const [shoveGrid, setShoveGrid] = useState<Map<string, number> | null>(null);
+  const [computingGrid, setComputingGrid] = useState(false);
+
+  function computeShoveGrid() {
+    if (!canCalc || stacks[hero] <= 0) return;
+    setComputingGrid(true);
+    setShoveGrid(null);
+    // 스피너가 먼저 그려지도록 계산을 다음 틱으로 미룹니다.
+    setTimeout(() => {
+      const bb = Math.max(0, Number(shoveBBStr) || 0);
+      const ante = Math.max(0, Number(shoveAnteStr) || 0);
+      const callerRanges = players
+        .map((_, i) => i)
+        .filter((i) => i !== hero && stacks[i] > 0)
+        .map((idx) => ({ idx, range: callRange }));
+      const grid = new Map<string, number>();
+      if (callerRanges.length) {
+        for (const label of allGridLabels()) {
+          try {
+            const r = icmShoveEv({
+              stacks,
+              payouts: fractions,
+              heroIdx: hero,
+              heroHand: label,
+              callerRanges,
+              sb: Math.floor(bb / 2),
+              bb,
+              ante,
+              iterations: 600,
+              seed: 2026,
+            });
+            if (r.shoveOk) grid.set(label, 1);
+          } catch {
+            /* 잘못된 콜 레인지 등은 무시 */
+          }
+        }
+      }
+      setShoveGrid(grid);
+      setComputingGrid(false);
+    }, 20);
+  }
 
   // ---- 핸들러 ----
   function applyPreset(id: string) {
@@ -669,6 +714,33 @@ export default function IcmPage() {
             </p>
           </div>
         )}
+
+        <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <button className="secondary" onClick={computeShoveGrid} disabled={computingGrid || !canCalc}>
+              {computingGrid ? '계산 중…' : '전체 셔브 레인지 계산 (169핸드)'}
+            </button>
+            {shoveGrid && (
+              <span className="muted">
+                +ICM 셔브 핸드 {shoveGrid.size}/169 · 위 콜 레인지·블라인드 기준
+              </span>
+            )}
+          </div>
+          {shoveGrid && shoveGrid.size > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <RangeGrid range={shoveGrid} />
+              <p className="muted" style={{ marginBottom: 0, marginTop: 10 }}>
+                초록 셀 = ICM 기준 셔브가 이득인 핸드(퍼스트-인 가정, 몬테카를로 근사). 콜 레인지를
+                바꾼 뒤 다시 계산하세요.
+              </p>
+            </div>
+          )}
+          {shoveGrid && shoveGrid.size === 0 && !computingGrid && (
+            <p className="muted" style={{ marginBottom: 0, marginTop: 10 }}>
+              이 스팟에서는 어떤 핸드도 셔브가 이득이 아닙니다 (또는 콜러/레인지 설정을 확인하세요).
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );
