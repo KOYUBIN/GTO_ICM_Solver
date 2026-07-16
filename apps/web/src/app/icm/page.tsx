@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   icm,
   riskPremium,
@@ -62,6 +62,35 @@ export default function IcmPage() {
   );
   const [heroIdx, setHeroIdx] = useState(0);
   const [villainIdx, setVillainIdx] = useState(1);
+
+  // ---- 테이블 세팅 로컬 저장 (새로고침해도 유지) ----
+  const savedLoaded = useRef(false);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('icm-table');
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (Array.isArray(s.players) && s.players.length >= MIN_PLAYERS) setPlayers(s.players);
+        if (typeof s.presetId === 'string') setPresetId(s.presetId);
+        if (typeof s.prizePoolStr === 'string') setPrizePoolStr(s.prizePoolStr);
+        if (Array.isArray(s.payoutPcts) && s.payoutPcts.length) setPayoutPcts(s.payoutPcts);
+      }
+    } catch {
+      /* 손상된 저장값 무시 */
+    }
+    savedLoaded.current = true;
+  }, []);
+  useEffect(() => {
+    if (!savedLoaded.current) return; // 초기 로드 전에는 기본값으로 덮어쓰지 않음
+    try {
+      localStorage.setItem(
+        'icm-table',
+        JSON.stringify({ players, presetId, prizePoolStr, payoutPcts }),
+      );
+    } catch {
+      /* 저장 실패 무시 */
+    }
+  }, [players, presetId, prizePoolStr, payoutPcts]);
 
   // ---- 몬스터 게임 (파이널 나인) 빠른 설정 ----
   const [entriesStr, setEntriesStr] = useState('21');
