@@ -5,7 +5,7 @@ import { parseCards, cardToString } from './cards.js';
 import { evaluate7, categoryOf, HandCategory } from './handEval.js';
 import { parseRange, rangePercent, labelToCombos, comboCount } from './range.js';
 import { calcEquity } from './equity.js';
-import { icm, riskPremium } from './icm.js';
+import { icm, riskPremium, dealCalc } from './icm.js';
 import { chenScore, pushFoldAdvice } from './preflop.js';
 
 test('card round-trips', () => {
@@ -88,6 +88,37 @@ test('icm: risk premium is positive on the bubble', () => {
   // 4 players, 3 paid: classic bubble pressure.
   const rp = riskPremium([3000, 3000, 3000, 3000], [50, 30, 20], 0, 1, 3000);
   assert.ok(rp > 0, `risk premium ${rp}`);
+});
+
+test('dealCalc: both methods sum to the contested prize total', () => {
+  const payouts = [500, 300, 200];
+  const d = dealCalc([6000, 2000, 2000], payouts);
+  assert.equal(d.totalPrize, 1000);
+  assert.equal(d.floor, 200); // 3 players contest places 1-3; floor = 3rd place
+  const sumIcm = d.icm.reduce((a, b) => a + b, 0);
+  const sumChop = d.chipChop.reduce((a, b) => a + b, 0);
+  assert.ok(Math.abs(sumIcm - 1000) < 1e-6, `icm sum ${sumIcm}`);
+  assert.ok(Math.abs(sumChop - 1000) < 1e-6, `chop sum ${sumChop}`);
+});
+
+test('dealCalc: chip chop gives the leader more, floor to everyone, ICM compresses', () => {
+  const payouts = [500, 300, 200];
+  const d = dealCalc([6000, 2000, 2000], payouts);
+  // Leader wins the most under both methods; everyone clears the floor.
+  assert.ok(d.chipChop[0] > d.chipChop[1]);
+  assert.ok(d.icm[0] > d.icm[1]);
+  for (const v of d.chipChop) assert.ok(v >= d.floor - 1e-9);
+  // Chip chop is more chip-weighted than ICM, so it pays the leader more.
+  assert.ok(d.chipChop[0] > d.icm[0], `chop ${d.chipChop[0]} vs icm ${d.icm[0]}`);
+});
+
+test('dealCalc: fewer remaining players than paid places only contests the top prizes', () => {
+  const payouts = [500, 300, 200, 100];
+  const d = dealCalc([5000, 5000], payouts); // 2 left, 4 paid
+  assert.equal(d.totalPrize, 800); // only places 1-2 are in play
+  assert.equal(d.floor, 300);
+  // Even stacks → even chop; ICM also ~even.
+  assert.ok(Math.abs(d.chipChop[0] - d.chipChop[1]) < 1e-6);
 });
 
 test('preflop: AA strongest, push/fold shoves AA short', () => {
