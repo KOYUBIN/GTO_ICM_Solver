@@ -80,6 +80,11 @@ const GROUPS: { title: string; items: Feature[] }[] = [
         title: '커뮤니티 · 전략 컨텐츠',
         desc: '핸드를 공유하고 칩EV·ICM·버블 전략 글을 작성·리뷰합니다.',
       },
+      {
+        href: '/glossary',
+        title: '📖 용어 사전',
+        desc: 'ICM·에쿼티·셔브·버블 등 어려운 포커 용어를 쉬운 말로 풀어 정리했습니다.',
+      },
     ],
   },
 ];
