@@ -33,6 +33,15 @@ function mmss(totalSec: number): string {
 
 const CLOCK_KEY = 'monster-clock-start';
 
+/** Harrington M-zone from an M-ratio. */
+function mZone(m: number): { name: string; color: string; advice: string } {
+  if (m >= 20) return { name: '그린 존', color: 'var(--accent)', advice: '풀 스택 — 정상적인 포스트플랍 포커, 프리미엄으로 압박' };
+  if (m >= 10) return { name: '옐로 존', color: '#e3c400', advice: '약한 핸드 가치 하락 — 스몰페어·수딧커넥터 신중, 리스팀 자제' };
+  if (m >= 6) return { name: '오렌지 존', color: '#e08a00', advice: '올인 or 폴드 위주 — 포지션·선제 공격, 리스팀 줄이기' };
+  if (m >= 1) return { name: '레드 존', color: 'var(--warn)', advice: '푸시/폴드만 — 첫 액션으로 셔브, 어떤 스팟이든 올인 각을 잡기' };
+  return { name: '데드 존', color: 'var(--danger, #e5484d)', advice: '거의 강제 올인 — 다음 유리한 순간 즉시 푸시' };
+}
+
 export default function MonsterPage() {
   // 라이브 레벨: 라이브 클럭(시작 시각 저장) 또는 수동 경과 분.
   const [elapsedStr, setElapsedStr] = useState('0');
@@ -83,6 +92,17 @@ export default function MonsterPage() {
     ? Math.max(0, MONSTER.levelMinutes * 60 - (elapsedSec! - levelIdx * MONSTER.levelMinutes * 60))
     : null;
   const regClosed = MONSTER.lateRegLevel != null && cur.level > MONSTER.lateRegLevel;
+
+  // 내 스택 진단 (현재 레벨 블라인드 기준).
+  const [myStackStr, setMyStackStr] = useState('2500000');
+  const diag = useMemo(() => {
+    const chips = Math.max(0, Number(myStackStr) || 0);
+    const bb = cur.bigBlind;
+    const eb = bb > 0 ? chips / bb : 0;
+    const cost = cur.smallBlind + cur.bigBlind + cur.ante;
+    const m = cost > 0 ? chips / cost : 0;
+    return { chips, eb, m, zone: mZone(m) };
+  }, [myStackStr, cur.bigBlind, cur.smallBlind, cur.ante]);
 
   // 상금 계산.
   const [entriesStr, setEntriesStr] = useState('21');
@@ -187,6 +207,52 @@ export default function MonsterPage() {
             </span>
           </div>
         </div>
+      </div>
+
+      {/* 내 스택 진단 (M-존) */}
+      <div className="card">
+        <h2>내 스택 진단 (M-존)</h2>
+        <p className="muted" style={{ marginTop: 0 }}>
+          현재 레벨(Lv{cur.level} · {fmt(cur.smallBlind)}/{fmt(cur.bigBlind)}
+          {cur.ante ? ` A${fmt(cur.ante)}` : ''}) 기준으로 유효 스택과 M-존을 진단합니다.
+        </p>
+        <div className="row">
+          <div>
+            <label>내 스택 (칩)</label>
+            <input
+              type="number"
+              min={0}
+              step={10000}
+              value={myStackStr}
+              onChange={(e) => setMyStackStr(e.target.value)}
+            />
+          </div>
+        </div>
+        <div style={{ marginTop: 12 }}>
+          <div className="stat">
+            <span>유효 스택</span>
+            <span className="val">{Math.round(diag.eb)} BB</span>
+          </div>
+          <div className="stat">
+            <span>M-비율</span>
+            <span className="val">{diag.m.toFixed(1)} M</span>
+          </div>
+          <div className="stat">
+            <span>존</span>
+            <span className="val">
+              <span
+                className="pill"
+                style={{ background: diag.zone.color, color: '#0a0e13', fontWeight: 700 }}
+              >
+                {diag.zone.name}
+              </span>
+            </span>
+          </div>
+        </div>
+        <p className="muted" style={{ marginBottom: 0 }}>
+          {diag.zone.advice}. 레드/데드 존이면{' '}
+          <Link href="/pushfold">푸시/폴드 차트</Link>에서 정확한 셔브 레인지를 확인하세요.
+        </p>
       </div>
 
       {/* 블라인드 구조표 */}
