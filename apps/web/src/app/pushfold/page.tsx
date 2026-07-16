@@ -90,10 +90,11 @@ export default function PushFoldPage() {
 
   return (
     <div className="container">
-      <h1>푸시/폴드 솔버</h1>
+      <h1>푸시/폴드 솔버 (올인 아니면 폴드)</h1>
       <p className="subtitle">
-        숏스택 올인 차트 근사. 스택 깊이와 뒤에 남은 플레이어 수로 셔브 레인지를 좁힙니다. (Nash 정확
-        해가 아닌 실용적 근사)
+        칩이 적을 때의 올인 판단 차트입니다. 내 스택(BB)과 뒤에 남은 사람 수에 따라 올인할 만한 손패
+        범위를 좁혀 줍니다. (수학적으로 완벽한 값이 아닌 실용적 근사 — 용어는 상단 메뉴의 &lsquo;용어
+        사전&rsquo; 참고)
       </p>
       <div style={{ marginBottom: 14 }}>
         <button className="secondary" onClick={copyShareLink}>
@@ -203,7 +204,7 @@ export default function PushFoldPage() {
               <span>권장 액션</span>
               <span className="val">
                 <span className={`pill ${advice.action}`}>
-                  {advice.action === 'push' ? '셔브' : advice.action === 'fold' ? '폴드' : '마지널'}
+                  {advice.action === 'push' ? '셔브(올인)' : advice.action === 'fold' ? '폴드(죽기)' : '애매'}
                 </span>
               </span>
             </div>

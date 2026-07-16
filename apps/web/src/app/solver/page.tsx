@@ -311,11 +311,11 @@ export default function SolverPage() {
 
   return (
     <div className="container">
-      <h1>포스트플랍 솔버 (MCCFR · 플랍/턴/리버)</h1>
+      <h1>포스트플랍 솔버 (플랍·턴·리버 최적 전략)</h1>
       <p className="subtitle">
-        몬테카를로 CFR로 플랍·턴·리버 스팟을 풉니다. 플랍·턴은 이후 카드를 챈스 샘플링으로 런아웃하여
-        멀티 스트리트로 계산하고, OOP의 체크/베팅 전략, IP 콜 빈도, OOP EV를 보여줍니다.
-        프리플랍 GTO 레인지는 <a href="/charts">차트</a>에서 확인하세요.
+        공용카드가 깔린 뒤(플랍·턴·리버)의 최적 전략을 계산으로 찾아 줍니다. 먼저 플레이하는 쪽(OOP)의
+        체크/베팅 비율, 뒤 사람(IP)의 콜 비율, 기대 이득(EV)을 보여줍니다. 무작위 시뮬레이션(몬테카를로)
+        기반 근사예요. 프리플랍 범위는 <a href="/charts">차트</a>에서 확인하세요.
       </p>
 
       <div className="card">
