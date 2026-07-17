@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   getPreset,
@@ -93,6 +93,37 @@ export default function MonsterPage() {
     : null;
   const regClosed = MONSTER.lateRegLevel != null && cur.level > MONSTER.lateRegLevel;
 
+  // 라이브 클럭이 새 레벨로 넘어가면 배너 + 짧은 알림음.
+  const prevLevel = useRef<number | null>(null);
+  const [levelUp, setLevelUp] = useState<number | null>(null);
+  useEffect(() => {
+    if (!clockRunning) {
+      prevLevel.current = cur.level;
+      return;
+    }
+    if (prevLevel.current != null && cur.level > prevLevel.current) {
+      setLevelUp(cur.level);
+      try {
+        const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        const ctx = new AC();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.frequency.value = 880;
+        gain.gain.setValueAtTime(0.15, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.5);
+      } catch {
+        /* 오디오 불가 무시 */
+      }
+      const t = setTimeout(() => setLevelUp(null), 6000);
+      prevLevel.current = cur.level;
+      return () => clearTimeout(t);
+    }
+    prevLevel.current = cur.level;
+  }, [cur.level, clockRunning]);
+
   // 내 스택 진단 (현재 레벨 블라인드 기준).
   const [myStackStr, setMyStackStr] = useState('2500000');
   const diag = useMemo(() => {
@@ -124,6 +155,23 @@ export default function MonsterPage() {
         스타트 {fmt(MONSTER.startingStack)} 칩 · 리바이 {fmt(MONSTER.rebuyStack ?? 0)} 칩 · 레벨{' '}
         {MONSTER.levelMinutes}분 · 레지 마감 L{MONSTER.lateRegLevel}.
       </p>
+
+      {levelUp != null && (
+        <div
+          className="card"
+          style={{
+            border: '2px solid var(--warn)',
+            background: 'rgba(240,180,0,0.15)',
+            textAlign: 'center',
+            fontWeight: 700,
+            fontSize: 18,
+          }}
+        >
+          🔔 레벨 업! 이제 Lv{levelUp} — {fmt(cur.smallBlind)}/{fmt(cur.bigBlind)}
+          {cur.ante ? ` (앤티 ${fmt(cur.ante)})` : ''}
+          {regClosed ? ' · 레지 마감' : ''}
+        </div>
+      )}
 
       {/* 라이브 레벨 */}
       <div className="card" style={{ border: '2px solid var(--warn)' }}>
