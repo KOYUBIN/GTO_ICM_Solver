@@ -22,7 +22,21 @@ const pg = pgPool;
 export const SESSION_COOKIE = 'gto_session';
 export const SESSION_MAX_AGE_SEC = 30 * 24 * 60 * 60; // 30 days
 
-export type PublicUser = { username: string; nick: string };
+export type PublicUser = {
+  username: string;
+  nick: string;
+  /** Spendable game money (게임머니). */
+  balance: number;
+  /** Cumulative tournament prize won (for ranking). */
+  points: number;
+  /** Tournaments won (1st place). */
+  wins: number;
+  /** Tournaments finished. */
+  games: number;
+};
+
+/** New accounts start with this much game money. */
+export const SIGNUP_BONUS = 1_000_000;
 
 type UserRec = {
   id: string;
@@ -31,12 +45,44 @@ type UserRec = {
   passHash: string; // hex
   salt: string; // hex (16 bytes)
   createdAt: string;
+  balance: number;
+  points: number;
+  wins: number;
+  games: number;
+  /** Game money earned from activities today (daily-cap guard). */
+  earnedToday: number;
+  /** YYYY-MM-DD the earnedToday counter belongs to. */
+  earnDay: string;
 };
 
 type SessionRec = { token: string; userId: string; createdAt: string };
 
 function toPublic(u: UserRec): PublicUser {
-  return { username: u.username, nick: u.nick };
+  return {
+    username: u.username,
+    nick: u.nick,
+    balance: u.balance ?? 0,
+    points: u.points ?? 0,
+    wins: u.wins ?? 0,
+    games: u.games ?? 0,
+  };
+}
+
+/** Fill in economy fields that predate the reward system. */
+function normalizeUser(u: UserRec): UserRec {
+  return {
+    ...u,
+    balance: u.balance ?? 0,
+    points: u.points ?? 0,
+    wins: u.wins ?? 0,
+    games: u.games ?? 0,
+    earnedToday: u.earnedToday ?? 0,
+    earnDay: u.earnDay ?? '',
+  };
+}
+
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 // ---------- validation (Korean error messages) ----------
@@ -130,6 +176,13 @@ function pgEnsure(): Promise<void> {
         salt text NOT NULL,
         created_at timestamptz NOT NULL DEFAULT now()
       )`;
+      // Reward-system columns (added later; safe on existing tables).
+      await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS balance bigint NOT NULL DEFAULT 0`;
+      await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS points bigint NOT NULL DEFAULT 0`;
+      await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS wins integer NOT NULL DEFAULT 0`;
+      await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS games integer NOT NULL DEFAULT 0`;
+      await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS earned_today bigint NOT NULL DEFAULT 0`;
+      await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS earn_day text NOT NULL DEFAULT ''`;
       await pg().sql`CREATE TABLE IF NOT EXISTS sessions (
         token text PRIMARY KEY,
         user_id text NOT NULL,
@@ -148,6 +201,12 @@ function rowToUser(r: Record<string, unknown>): UserRec {
     passHash: String(r.pass_hash),
     salt: String(r.salt),
     createdAt: new Date(r.created_at as string | Date).toISOString(),
+    balance: Number(r.balance ?? 0),
+    points: Number(r.points ?? 0),
+    wins: Number(r.wins ?? 0),
+    games: Number(r.games ?? 0),
+    earnedToday: Number(r.earned_today ?? 0),
+    earnDay: String(r.earn_day ?? ''),
   };
 }
 
@@ -156,31 +215,32 @@ function rowToUser(r: Record<string, unknown>): UserRec {
 async function findUserByUsername(username: string): Promise<UserRec | undefined> {
   if (usePg) {
     await pgEnsure();
-    const { rows } = await pg().sql`SELECT id, username, nick, pass_hash, salt, created_at
-      FROM users WHERE lower(username) = lower(${username})`;
+    const { rows } = await pg().sql`SELECT * FROM users WHERE lower(username) = lower(${username})`;
     return rows[0] ? rowToUser(rows[0]) : undefined;
   }
   const db = await fileRead();
   const lower = username.toLowerCase();
-  return db.users.find((u) => u.username.toLowerCase() === lower);
+  const u = db.users.find((x) => x.username.toLowerCase() === lower);
+  return u ? normalizeUser(u) : undefined;
 }
 
 async function getUserById(id: string): Promise<UserRec | undefined> {
   if (usePg) {
     await pgEnsure();
-    const { rows } = await pg().sql`SELECT id, username, nick, pass_hash, salt, created_at
-      FROM users WHERE id = ${id}`;
+    const { rows } = await pg().sql`SELECT * FROM users WHERE id = ${id}`;
     return rows[0] ? rowToUser(rows[0]) : undefined;
   }
   const db = await fileRead();
-  return db.users.find((u) => u.id === id);
+  const u = db.users.find((x) => x.id === id);
+  return u ? normalizeUser(u) : undefined;
 }
 
 async function insertUser(user: UserRec): Promise<void> {
   if (usePg) {
     await pgEnsure();
-    const res = await pg().sql`INSERT INTO users (id, username, nick, pass_hash, salt, created_at)
-      VALUES (${user.id}, ${user.username}, ${user.nick}, ${user.passHash}, ${user.salt}, ${user.createdAt})
+    const res = await pg().sql`INSERT INTO users (id, username, nick, pass_hash, salt, created_at, balance, points, wins, games, earned_today, earn_day)
+      VALUES (${user.id}, ${user.username}, ${user.nick}, ${user.passHash}, ${user.salt}, ${user.createdAt},
+              ${user.balance}, ${user.points}, ${user.wins}, ${user.games}, ${user.earnedToday}, ${user.earnDay})
       ON CONFLICT (username) DO NOTHING`;
     if (res.rowCount === 0) throw new Error('이미 사용 중인 아이디입니다.');
     return;
@@ -277,6 +337,12 @@ export async function register(
     passHash: passHash.toString('hex'),
     salt: salt.toString('hex'),
     createdAt: new Date().toISOString(),
+    balance: SIGNUP_BONUS, // 가입 보너스 게임머니
+    points: 0,
+    wins: 0,
+    games: 0,
+    earnedToday: 0,
+    earnDay: '',
   };
   await insertUser(user);
   const token = await createSession(user.id);
@@ -316,10 +382,107 @@ export async function updateNick(token: string | null | undefined, nick: string)
   const user = await getUserById(sess.userId);
   if (!user) throw new Error('로그인이 필요합니다.');
   await setNick(user.id, nname);
-  return { username: user.username, nick: nname };
+  return toPublic({ ...user, nick: nname });
 }
 
 export async function logout(token: string | null | undefined): Promise<void> {
   if (!token) return;
   await deleteSession(token);
+}
+
+// ---------- economy (게임머니) ----------
+
+/** Max game money earnable from activities per day (excludes prizes). */
+export const DAILY_EARN_CAP = 200_000;
+
+/** Persist just the economy fields of a user (file backend). */
+async function saveEconomyFile(u: UserRec): Promise<void> {
+  const db = await fileRead();
+  const idx = db.users.findIndex((x) => x.id === u.id);
+  if (idx >= 0) {
+    db.users[idx] = u;
+    await fileWrite(db);
+  }
+}
+
+/** Grant game money for an activity (quiz/study/feature), capped per day. */
+export async function earn(
+  username: string,
+  amount: number,
+): Promise<{ balance: number; earned: number; capped: boolean }> {
+  const rec = await findUserByUsername(username);
+  if (!rec) throw new Error('로그인이 필요합니다.');
+  const u = normalizeUser(rec);
+  const day = today();
+  if (u.earnDay !== day) {
+    u.earnDay = day;
+    u.earnedToday = 0;
+  }
+  const room = Math.max(0, DAILY_EARN_CAP - u.earnedToday);
+  const grant = Math.max(0, Math.min(Math.floor(amount), room));
+  u.earnedToday += grant;
+  u.balance += grant;
+  if (usePg) {
+    await pgEnsure();
+    await pg().sql`UPDATE users SET balance = balance + ${grant}, earned_today = ${u.earnedToday}, earn_day = ${u.earnDay}
+      WHERE id = ${u.id}`;
+  } else {
+    await saveEconomyFile(u);
+  }
+  return { balance: u.balance, earned: grant, capped: grant < Math.floor(amount) };
+}
+
+/** Spend game money (buy-in / rebuy). Throws if the balance is too low. */
+export async function spend(username: string, amount: number): Promise<number> {
+  const amt = Math.max(0, Math.floor(amount));
+  if (usePg) {
+    await pgEnsure();
+    const res = await pg().sql`UPDATE users SET balance = balance - ${amt}
+      WHERE lower(username) = lower(${username}) AND balance >= ${amt} RETURNING balance`;
+    if (res.rowCount === 0) throw new Error('게임머니가 부족합니다.');
+    return Number(res.rows[0].balance);
+  }
+  const rec = await findUserByUsername(username);
+  if (!rec) throw new Error('로그인이 필요합니다.');
+  const u = normalizeUser(rec);
+  if (u.balance < amt) throw new Error('게임머니가 부족합니다.');
+  u.balance -= amt;
+  await saveEconomyFile(u);
+  return u.balance;
+}
+
+/** Credit a tournament prize and record the game/win. No-op for unknown users. */
+export async function awardPrize(username: string, prize: number, isWin: boolean): Promise<void> {
+  const amt = Math.max(0, Math.floor(prize));
+  const winInc = isWin ? 1 : 0;
+  if (usePg) {
+    await pgEnsure();
+    await pg().sql`UPDATE users SET balance = balance + ${amt}, points = points + ${amt},
+      games = games + 1, wins = wins + ${winInc} WHERE lower(username) = lower(${username})`;
+    return;
+  }
+  const rec = await findUserByUsername(username);
+  if (!rec) return;
+  const u = normalizeUser(rec);
+  u.balance += amt;
+  u.points += amt;
+  u.games += 1;
+  u.wins += winInc;
+  await saveEconomyFile(u);
+}
+
+/** Top members by cumulative winnings (points), then balance. */
+export async function leaderboard(limit = 50): Promise<PublicUser[]> {
+  const n = Math.max(1, Math.min(100, Math.floor(limit)));
+  if (usePg) {
+    await pgEnsure();
+    const { rows } = await pg().sql`SELECT * FROM users ORDER BY points DESC, balance DESC LIMIT ${n}`;
+    return rows.map((r) => toPublic(rowToUser(r)));
+  }
+  const db = await fileRead();
+  return db.users
+    .map(normalizeUser)
+    .sort((a, b) => b.points - a.points || b.balance - a.balance)
+    .slice(0, n)
+    .map(toPublic);
 }
