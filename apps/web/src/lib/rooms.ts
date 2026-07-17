@@ -91,6 +91,8 @@ export interface Room {
   finishOrder?: string[];
   /** Times a rebuy was taken (for the prize-pool estimate). */
   rebuyCount?: number;
+  /** A final-table deal that ends the tournament (split among remaining players). */
+  dealResult?: { method: 'icm' | 'chip'; amounts: Record<string, number>; at: string };
   /** Table chat, newest last (capped server-side). */
   chat?: ChatMsg[];
   /** Finished-hand records, newest last (capped server-side). */
@@ -134,6 +136,17 @@ export interface RoomView extends Room {
   overallWinner?: string;
   /** Final standings (place 1 = winner) when gameOver, with optional prize. */
   standings?: { place: number; name: string; prize?: number }[];
+  /** True when a final-table deal is offered (monster, 2~6 left, not over). */
+  canDeal?: boolean;
+  /** Live deal split preview for the remaining players (chip-chop vs ICM). */
+  dealPreview?: {
+    ids: string[];
+    names: string[];
+    stacks: number[];
+    chip: number[];
+    icm: number[];
+    pool: number;
+  };
 }
 
 // ----- client fetch helpers -----
@@ -203,6 +216,20 @@ export async function rebuy(id: string, playerId: string): Promise<RoomView> {
     body: JSON.stringify({ playerId }),
   });
   if (!res.ok) throw new Error((await safeErr(res)) || '리바이 실패');
+  return res.json();
+}
+
+export async function makeDeal(
+  id: string,
+  playerId: string,
+  method: 'icm' | 'chip',
+): Promise<RoomView> {
+  const res = await fetch(`/api/rooms/${encodeURIComponent(id)}/deal`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ playerId, method }),
+  });
+  if (!res.ok) throw new Error((await safeErr(res)) || '딜 실패');
   return res.json();
 }
 

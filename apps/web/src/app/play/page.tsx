@@ -10,6 +10,7 @@ import {
   sendAction,
   leaveRoom as leaveRoomReq,
   rebuy as rebuyReq,
+  makeDeal as makeDealReq,
   listPublicRooms,
   type RoomView,
   type RoomConfig,
@@ -154,6 +155,16 @@ export default function PlayPage() {
     }
   }
 
+  async function onMakeDeal(method: 'icm' | 'chip') {
+    if (!roomId || !playerId) return;
+    try {
+      const v = await makeDealReq(roomId, playerId, method);
+      setRoom(v);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   if (roomId) {
     return (
       <div className="container">
@@ -166,6 +177,7 @@ export default function PlayPage() {
             onDeal={onDeal}
             onLeave={leave}
             onRebuy={onRebuy}
+            onMakeDeal={onMakeDeal}
           />
         ) : (
           <div className="card" style={{ textAlign: 'center', padding: 28 }}>
