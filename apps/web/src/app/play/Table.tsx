@@ -210,14 +210,46 @@ export function Table({
             </div>
           )}
           {room.gameOver ? (
-            <div className="card" style={{ textAlign: 'center', border: '2px solid var(--warn)' }}>
-              <h2 style={{ margin: '4px 0' }}>🏆 게임 종료</h2>
-              <p style={{ margin: '4px 0 12px' }}>
+            <div className="card" style={{ border: '2px solid var(--warn)' }}>
+              <h2 style={{ margin: '4px 0', textAlign: 'center' }}>🏆 게임 종료</h2>
+              <p style={{ margin: '4px 0 12px', textAlign: 'center' }}>
                 우승: <strong style={{ color: 'var(--warn)', fontSize: 18 }}>{room.overallWinner ?? '—'}</strong>
               </p>
-              <button className="secondary" onClick={onLeave}>
-                {spectating ? '관전 종료' : '테이블 나가기'}
-              </button>
+              {room.standings && room.standings.length > 0 && (
+                <div className="table-scroll" style={{ marginBottom: 12 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+                    <thead>
+                      <tr style={{ color: 'var(--text-dim)', textAlign: 'left' }}>
+                        <th style={{ padding: '6px 8px 6px 0' }}>순위</th>
+                        <th style={{ padding: '6px 8px' }}>플레이어</th>
+                        {room.standings.some((s) => s.prize != null) && (
+                          <th style={{ padding: '6px 0 6px 8px', textAlign: 'right' }}>예상 상금</th>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {room.standings.map((s) => (
+                        <tr key={s.place} style={{ borderTop: '1px solid var(--border)' }}>
+                          <td style={{ padding: '8px 8px 8px 0', fontWeight: 700 }}>
+                            {s.place === 1 ? '🥇 1위' : s.place === 2 ? '🥈 2위' : s.place === 3 ? '🥉 3위' : `${s.place}위`}
+                          </td>
+                          <td style={{ padding: '8px' }}>{s.name}</td>
+                          {room.standings!.some((x) => x.prize != null) && (
+                            <td style={{ padding: '8px 0 8px 8px', textAlign: 'right', fontWeight: 700 }}>
+                              {s.prize != null ? `${Math.round(s.prize).toLocaleString('ko-KR')}원` : '—'}
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              <div style={{ textAlign: 'center' }}>
+                <button className="secondary" onClick={onLeave}>
+                  {spectating ? '관전 종료' : '테이블 나가기'}
+                </button>
+              </div>
             </div>
           ) : spectating ? (
             <div className="card">
