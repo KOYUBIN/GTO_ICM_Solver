@@ -1,7 +1,15 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+
+/** BREAK(휴식)이 끝나는 레벨 → 표시 라벨. 공식 구조표 기준. */
+const BREAK_AFTER: Record<number, string> = {
+  5: 'BREAK 1 (휴식)',
+  10: 'BREAK 2 · Entry Close (레지 마감)',
+  15: 'BREAK 3 (휴식)',
+  20: 'BREAK 4 (휴식)',
+};
 import {
   getPreset,
   levelAt,
@@ -152,8 +160,9 @@ export default function MonsterPage() {
       <h1>🎰 몬스터 게임 (파이널 나인)</h1>
       <p className="subtitle">
         파이널 나인 홀덤펍 몬스터 게임 전용 허브 — 블라인드 구조, 라이브 레벨, 상금 계산을 한 곳에서.
-        스타트 {fmt(MONSTER.startingStack)} 칩 · 리바이 {fmt(MONSTER.rebuyStack ?? 0)} 칩 · 레벨{' '}
-        {MONSTER.levelMinutes}분 · 레지 마감 L{MONSTER.lateRegLevel}.
+        스타트 {fmt(MONSTER.startingStack)} 칩 · 리바이 {fmt(MONSTER.rebuyStack ?? 0)} 칩(최대{' '}
+        {MONSTER_GAME.maxRebuys}회) · 레벨 {MONSTER.levelMinutes}분 · 25레벨 · 레지 마감 L
+        {MONSTER.lateRegLevel}.
       </p>
 
       {levelUp != null && (
@@ -327,25 +336,38 @@ export default function MonsterPage() {
               {MONSTER.levels.map((l, i) => {
                 const isCur = l.level === cur.level;
                 const isReg = MONSTER.lateRegLevel === l.level;
+                const brk = BREAK_AFTER[l.level];
                 return (
-                  <tr
-                    key={l.level}
-                    style={{
-                      borderTop: '1px solid var(--border)',
-                      textAlign: 'right',
-                      background: isCur ? 'rgba(240,180,0,0.12)' : undefined,
-                    }}
-                  >
-                    <td style={{ textAlign: 'left', padding: '8px 8px 8px 0', fontWeight: 600 }}>
-                      Lv{l.level}
-                      {isReg ? <span className="muted"> · 레지마감</span> : ''}
-                      {isCur ? ' ◀' : ''}
-                    </td>
-                    <td style={{ padding: '8px' }}>{fmt(l.smallBlind)}</td>
-                    <td style={{ padding: '8px', fontWeight: 700 }}>{fmt(l.bigBlind)}</td>
-                    <td style={{ padding: '8px' }}>{l.ante ? fmt(l.ante) : '—'}</td>
-                    <td style={{ padding: '8px 0 8px 8px' }}>{minsLabel(i * MONSTER.levelMinutes)}</td>
-                  </tr>
+                  <Fragment key={l.level}>
+                    <tr
+                      style={{
+                        borderTop: '1px solid var(--border)',
+                        textAlign: 'right',
+                        background: isCur ? 'rgba(240,180,0,0.12)' : undefined,
+                      }}
+                    >
+                      <td style={{ textAlign: 'left', padding: '8px 8px 8px 0', fontWeight: 600 }}>
+                        Lv{l.level}
+                        {isReg ? <span className="muted"> · 레지마감</span> : ''}
+                        {isCur ? ' ◀' : ''}
+                      </td>
+                      <td style={{ padding: '8px' }}>{fmt(l.smallBlind)}</td>
+                      <td style={{ padding: '8px', fontWeight: 700 }}>{fmt(l.bigBlind)}</td>
+                      <td style={{ padding: '8px' }}>{l.ante ? fmt(l.ante) : '—'}</td>
+                      <td style={{ padding: '8px 0 8px 8px' }}>{minsLabel(i * MONSTER.levelMinutes)}</td>
+                    </tr>
+                    {brk && (
+                      <tr style={{ borderTop: '1px solid var(--border)' }}>
+                        <td
+                          colSpan={5}
+                          className="muted"
+                          style={{ padding: '6px 0', textAlign: 'center', fontWeight: 700, letterSpacing: 0.3 }}
+                        >
+                          ☕ {brk}
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>
