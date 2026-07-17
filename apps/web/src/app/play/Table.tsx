@@ -219,6 +219,11 @@ export function Table({
               <h2 style={{ margin: '4px 0', textAlign: 'center' }}>🏆 게임 종료</h2>
               <p style={{ margin: '4px 0 12px', textAlign: 'center' }}>
                 우승: <strong style={{ color: 'var(--warn)', fontSize: 18 }}>{room.overallWinner ?? '—'}</strong>
+                {room.dealResult && (
+                  <span className="muted" style={{ display: 'block', fontSize: 13, marginTop: 4 }}>
+                    🤝 딜로 종료 ({room.dealResult.method === 'icm' ? 'ICM' : '칩찹'} 분배)
+                  </span>
+                )}
               </p>
               {room.standings && room.standings.length > 0 && (
                 <div className="table-scroll" style={{ marginBottom: 12 }}>
@@ -804,10 +809,12 @@ function DealPanel({
   const fmt = (x: number) => `${Math.round(x).toLocaleString('ko-KR')}원`;
   return (
     <div className="card" style={{ border: '2px solid var(--accent, #58a6ff)' }}>
-      <h3 style={{ margin: '2px 0 6px' }}>🤝 파이널 딜 (상금 나누기)</h3>
+      <h3 style={{ margin: '2px 0 6px' }}>🤝 파이널 딜 (상금 나누기) · 선택</h3>
       <p className="muted" style={{ marginTop: 0 }}>
-        남은 {preview.ids.length}명이 지금 딜하면 각자 받는 금액입니다. 총 상금 {fmt(preview.pool)} ·
-        칩찹(칩 비율) vs ICM(생존 가치) 중 선택.
+        딜 = 남은 사람끼리 더 안 겨루고 남은 상금을 나눠 갖고 게임을 끝내는 합의입니다(실전 파이널
+        테이블에서 흔함). <strong>안 해도 되며, 끝까지 플레이해도 됩니다.</strong> 지금 딜하면 남은{' '}
+        {preview.ids.length}명이 각자 받는 금액: 총 상금 {fmt(preview.pool)} · 칩찹(칩 비율) vs
+        ICM(생존 가치) 중 선택.
       </p>
       <div className="table-scroll">
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
