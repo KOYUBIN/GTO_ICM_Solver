@@ -28,6 +28,7 @@ const GROUPS: { title: string; links: { href: string; label: string; icon: strin
     title: '분석 · 기록',
     links: [
       { href: '/trainer', label: '학습하기', icon: '🎓' },
+      { href: '/ranking', label: '랭킹', icon: '🏅' },
       { href: '/replay', label: '리플레이 · 분석', icon: '🎬' },
       { href: '/notes', label: '핸드 기록장', icon: '📓' },
       { href: '/glossary', label: '용어 사전', icon: '📖' },
@@ -38,7 +39,7 @@ const GROUPS: { title: string; links: { href: string; label: string; icon: strin
 export function Nav() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
-  const [me, setMe] = useState<{ username: string; nick: string } | null>(null);
+  const [me, setMe] = useState<{ username: string; nick: string; balance?: number } | null>(null);
 
   useEffect(() => {
     fetch('/api/auth/me')
@@ -78,7 +79,18 @@ export function Nav() {
       </button>
 
       <Link href={authHref} className="auth-chip" title={me?.username}>
-        {me ? me.nick : '로그인'}
+        {me ? (
+          <>
+            {me.nick}
+            {me.balance != null && (
+              <span style={{ marginLeft: 6, color: 'var(--warn)', fontWeight: 700 }}>
+                💰{me.balance.toLocaleString('ko-KR')}
+              </span>
+            )}
+          </>
+        ) : (
+          '로그인'
+        )}
       </Link>
 
       {open && <div className="drawer-backdrop" onClick={() => setOpen(false)} />}

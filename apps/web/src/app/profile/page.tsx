@@ -3,7 +3,16 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 
-type User = { username: string; nick: string };
+type User = {
+  username: string;
+  nick: string;
+  balance?: number;
+  points?: number;
+  wins?: number;
+  games?: number;
+};
+
+const won = (x: number) => (Math.round(x) || 0).toLocaleString('ko-KR');
 
 export default function ProfilePage() {
   // undefined = loading, null = not logged in
@@ -72,6 +81,23 @@ export default function ProfilePage() {
   return (
     <div className="container" style={{ maxWidth: 440 }}>
       <h1>내 프로필</h1>
+      <div className="card" style={{ border: '2px solid var(--warn)' }}>
+        <div className="stat">
+          <span>💰 게임머니</span>
+          <span className="val" style={{ color: 'var(--warn)' }}>{won(user.balance ?? 0)} GM</span>
+        </div>
+        <div className="stat">
+          <span>누적 상금(랭킹 점수)</span>
+          <span className="val">{won(user.points ?? 0)}</span>
+        </div>
+        <div className="stat">
+          <span>우승 / 참가</span>
+          <span className="val">{user.wins ?? 0}승 / {user.games ?? 0}게임</span>
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <Link href="/ranking" className="btn-link">🏅 랭킹 보기 →</Link>
+        </div>
+      </div>
       <div className="card">
         <label>아이디</label>
         <p style={{ margin: '4px 0 14px' }}>
