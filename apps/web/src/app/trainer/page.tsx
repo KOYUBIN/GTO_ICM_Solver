@@ -955,11 +955,11 @@ export default function TrainerPage() {
 
   return (
     <div className="container" style={{ maxWidth: 860 }}>
-      <h1>학습하기 · GTO / ICM 트레이너</h1>
+      <h1>학습하기 · 문제 풀이 연습</h1>
       <p className="subtitle">
-        GTO Wizard 트레이너식 드릴 — 실시간 프리플랍 스팟, 정밀 계산된 실전 칩-EV 문제, ICM 푸시/폴드
-        문제를 풀 수 있습니다. 기록은 내 기기에 저장됩니다. 총 문제 은행: 칩EV {CHIP_COUNTS.chipEv} · ICM{' '}
-        {CHIP_COUNTS.icm}
+        실전처럼 반복 연습하는 문제 풀이 — 프리플랍 상황(실시간), 칩 기준 실전 문제, ICM(상금 고려)
+        올인/폴드 문제를 풉니다. 기록은 내 기기에 저장됩니다. 문제 수: 칩EV {CHIP_COUNTS.chipEv}개 · ICM{' '}
+        {CHIP_COUNTS.icm}개. 모르는 용어는 상단 메뉴 &lsquo;용어 사전&rsquo;.
       </p>
 
       {/* Mode selector */}
