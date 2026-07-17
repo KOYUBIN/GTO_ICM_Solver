@@ -226,6 +226,15 @@ function Landing({
       .catch(() => {});
   }, []);
 
+  // 몬스터 허브 등에서 ?preset=monster 로 넘어오면 해당 프리셋을 미리 선택.
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search).get('preset');
+    if (p && PRESET_LIST.some((x) => x.id === p)) {
+      setPresetId(p);
+      if (p === 'monster') setRoomName('몬스터 게임');
+    }
+  }, []);
+
   // Refresh the public lobby list while on the landing page.
   useEffect(() => {
     let alive = true;
