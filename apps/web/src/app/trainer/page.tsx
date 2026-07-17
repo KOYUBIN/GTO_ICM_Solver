@@ -831,6 +831,26 @@ export default function TrainerPage() {
   const [autoNext, setAutoNext] = useState(false);
   const timerRef = useRef<number | null>(null);
 
+  // 정답을 맞히면 게임머니 지급 (로그인 시, 서버 일일 상한 적용).
+  const [earnFlash, setEarnFlash] = useState<number | null>(null);
+  const earnTimerRef = useRef<number | null>(null);
+  function earnReward() {
+    fetch('/api/economy/earn', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reason: 'quiz' }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d && d.earned > 0) {
+          setEarnFlash(d.earned);
+          if (earnTimerRef.current) window.clearTimeout(earnTimerRef.current);
+          earnTimerRef.current = window.setTimeout(() => setEarnFlash(null), 1500);
+        }
+      })
+      .catch(() => {});
+  }
+
   // Client-only bootstrap: load persisted stats and deal the first spot.
   useEffect(() => {
     setStats(loadStats());
@@ -899,6 +919,7 @@ export default function TrainerPage() {
     };
     setStats(next);
     saveStats(next);
+    if (correct) earnReward();
     if (autoNext) timerRef.current = window.setTimeout(nextSpot, 1800);
   }
 
@@ -922,6 +943,7 @@ export default function TrainerPage() {
       saveStats(next);
       return next;
     });
+    if (correct) earnReward();
   }
 
   function retryWrong() {
@@ -955,6 +977,25 @@ export default function TrainerPage() {
 
   return (
     <div className="container" style={{ maxWidth: 860 }}>
+      {earnFlash != null && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: 20,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: 'var(--warn)',
+            color: '#0a0e13',
+            fontWeight: 700,
+            padding: '8px 16px',
+            borderRadius: 999,
+            zIndex: 50,
+            boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+          }}
+        >
+          💰 +{earnFlash.toLocaleString('ko-KR')} 게임머니
+        </div>
+      )}
       <h1>학습하기 · 문제 풀이 연습</h1>
       <p className="subtitle">
         실전처럼 반복 연습하는 문제 풀이 — 프리플랍 상황(실시간), 칩 기준 실전 문제, ICM(상금 고려)
