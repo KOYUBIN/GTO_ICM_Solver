@@ -28,6 +28,9 @@ import {
   redactFor,
   legalActions,
   getPreset,
+  monsterPaidCount,
+  monsterPrizePool,
+  monsterPayouts,
   type TableState,
   type Action,
   type BlindLevel,
@@ -267,6 +270,53 @@ function recordHandIfEnded(room: Room): void {
     endedAt: new Date().toISOString(),
   });
   if (hist.length > 20) hist.splice(0, hist.length - 20);
+  recordBusts(room);
+}
+
+/**
+ * Record players who ran out of chips this hand into the elimination order.
+ * Runs once per ended hand (recordHandIfEnded is idempotent). A player who
+ * later rebuys is removed again in rebuyPlayer, so the order stays accurate.
+ */
+function recordBusts(room: Room): void {
+  const st = room.gameState;
+  if (!st) return;
+  const order = (room.finishOrder ??= []);
+  const seen = new Set(order);
+  for (const seat of st.seats) {
+    if (seat.stack > 0 || seat.status === 'empty') continue;
+    if (!room.players.some((p) => p.id === seat.id)) continue; // 방에 없는 좌석 무시
+    if (seen.has(seat.id)) continue;
+    order.push(seat.id);
+    seen.add(seat.id);
+  }
+}
+
+/** Final standings (place 1 = winner) with an optional prize estimate. */
+function computeStandings(room: Room, winnerId: string | undefined) {
+  const nameOf = (id: string) =>
+    room.players.find((p) => p.id === id)?.name ??
+    room.gameState?.seats.find((s) => s.id === id)?.name ??
+    '?';
+  const order = room.finishOrder ?? [];
+  const ranked: string[] = [];
+  const push = (id: string | undefined) => {
+    if (id && !ranked.includes(id)) ranked.push(id);
+  };
+  push(winnerId);
+  for (let i = order.length - 1; i >= 0; i--) push(order[i]); // 최근 탈락 = 상위
+  for (const p of room.players) push(p.id); // 혹시 누락된 현재 플레이어
+  const prizes = tournamentPrizes(room);
+  return ranked.map((id, i) => ({ place: i + 1, name: nameOf(id), prize: prizes[i] }));
+}
+
+/** Prize per finishing place. Only the 몬스터 프리셋에 대해 상금을 추정합니다. */
+function tournamentPrizes(room: Room): (number | undefined)[] {
+  if (room.config.presetId !== 'monster') return [];
+  const entrants = room.players.length + (room.left?.length ?? 0);
+  const pool = monsterPrizePool(entrants, room.rebuyCount ?? 0);
+  const paid = monsterPaidCount(entrants);
+  return monsterPayouts(paid).map((p) => p * pool);
 }
 
 /** Load a room and apply any due timeouts / auto-advance, persisting changes. */
@@ -350,10 +400,16 @@ export function toView(room: Room, viewerId?: string): RoomView {
         return !seat || seat.stack > 0; // unseated joiners count as in
       });
       const overByLeave = room.players.length <= 1;
-      const overByBust = !room.config.allowRebuy && withChips.length <= 1;
+      // Rebuys keep a tournament alive; once they're impossible (no-rebuy table
+      // or late-reg closed) a single chip stack means it's over.
+      const regClosed = !!computeClock(room)?.registrationClosed;
+      const rebuysPossible = !!room.config.allowRebuy && !regClosed;
+      const overByBust = !rebuysPossible && withChips.length <= 1;
       if (overByLeave || overByBust) {
         view.gameOver = true;
-        view.overallWinner = (withChips[0] ?? room.players[0])?.name;
+        const winner = withChips[0] ?? room.players[0];
+        view.overallWinner = winner?.name;
+        view.standings = computeStandings(room, winner?.id);
       }
     }
   }
@@ -531,6 +587,11 @@ export async function rebuyPlayer(id: string, playerId: string): Promise<Room | 
         : s,
     ),
   };
+  // They re-entered: drop from the elimination order and count the rebuy.
+  if (room.finishOrder?.includes(playerId)) {
+    room.finishOrder = room.finishOrder.filter((id) => id !== playerId);
+  }
+  room.rebuyCount = (room.rebuyCount ?? 0) + 1;
   room.updatedAt = new Date().toISOString();
   await persist(room, expected);
   return room;

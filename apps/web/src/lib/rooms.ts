@@ -87,6 +87,10 @@ export interface Room {
   handEndedAt?: string;
   /** Ids of players who left; skipped on future deals. */
   left?: string[];
+  /** Ids of busted/left players in elimination order (first out = first). */
+  finishOrder?: string[];
+  /** Times a rebuy was taken (for the prize-pool estimate). */
+  rebuyCount?: number;
   /** Table chat, newest last (capped server-side). */
   chat?: ChatMsg[];
   /** Finished-hand records, newest last (capped server-side). */
@@ -128,6 +132,8 @@ export interface RoomView extends Room {
   gameOver?: boolean;
   /** Name of the overall winner when gameOver. */
   overallWinner?: string;
+  /** Final standings (place 1 = winner) when gameOver, with optional prize. */
+  standings?: { place: number; name: string; prize?: number }[];
 }
 
 // ----- client fetch helpers -----
