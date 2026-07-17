@@ -354,18 +354,20 @@ export function icmShoveEv(opts: IcmShoveEvOptions): IcmShoveEvResult {
 // ---------------------------------------------------------------------------
 
 /**
- * 파이널 나인 홀덤펍 "몬스터 게임"의 실제 구조 상수.
+ * 파이널 나인 홀덤펍 "몬스터 게임"의 실제 구조 상수 (공식 구조표 기준).
  *
  * - buyIn / rebuyFee: 바이인·리바이 모두 3만원, 전액 프라이즈풀에 포함.
- * - startStack / rebuyStack: 스타트 250만 칩, 리바이 300만 칩 (참고용, ICM 계산엔
+ * - startStack / rebuyStack: 스타트 300만 칩, 리바이 400만 칩 (참고용, ICM 계산엔
  *   실제 현재 스택을 입력).
- * - lateRegLevel: 레이트 레지스트레이션(리바이) 마감 레벨.
+ * - maxRebuys: 리바이는 인당 최대 2회.
+ * - lateRegLevel: 레이트 레지스트레이션(리바이) 마감 레벨 (L10 뒤 Entry Close).
  */
 export const MONSTER_GAME = {
   buyIn: 30000,
   rebuyFee: 30000,
-  startStack: 2_500_000,
-  rebuyStack: 3_000_000,
+  startStack: 3_000_000,
+  rebuyStack: 4_000_000,
+  maxRebuys: 2,
   lateRegLevel: 10,
 } as const;
 

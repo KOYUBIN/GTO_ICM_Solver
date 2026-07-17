@@ -7,16 +7,16 @@ test("monster preset exists with the expected top-level fields", () => {
   const p = getPreset('monster');
   assert.equal(p.id, 'monster');
   assert.equal(p.name, '몬스터 (파이널 나인)');
-  assert.equal(p.startingStack, 2_500_000);
+  assert.equal(p.startingStack, 3_000_000);
   assert.equal(p.levelMinutes, 10);
   assert.equal(p.isCash, false);
-  assert.equal(p.rebuyStack, 3_000_000);
+  assert.equal(p.rebuyStack, 4_000_000);
   assert.equal(p.lateRegLevel, 10);
 });
 
 test("monster ladder has a strictly increasing bigBlind", () => {
   const p = getPreset('monster');
-  assert.ok(p.levels.length >= 16, `expected >=16 levels, got ${p.levels.length}`);
+  assert.equal(p.levels.length, 25, `expected 25 levels, got ${p.levels.length}`);
   for (let i = 1; i < p.levels.length; i++) {
     assert.ok(
       p.levels[i].bigBlind > p.levels[i - 1].bigBlind,

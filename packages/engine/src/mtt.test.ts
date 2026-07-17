@@ -160,8 +160,8 @@ test('icmShoveEv: accepts exact hero cards and multiple callers behind', () => {
 test('MONSTER_GAME constants match the real 파이널 나인 structure', () => {
   assert.equal(MONSTER_GAME.buyIn, 30000);
   assert.equal(MONSTER_GAME.rebuyFee, 30000);
-  assert.equal(MONSTER_GAME.startStack, 2_500_000);
-  assert.equal(MONSTER_GAME.rebuyStack, 3_000_000);
+  assert.equal(MONSTER_GAME.startStack, 3_000_000);
+  assert.equal(MONSTER_GAME.rebuyStack, 4_000_000);
   assert.equal(MONSTER_GAME.lateRegLevel, 10);
 });
 
