@@ -656,6 +656,12 @@ function Landing({
             공개 테이블 목록에 표시 (끄면 코드로만 참가 가능)
           </label>
         </div>
+        {!showCustom && presetId === 'monster' && (
+          <p className="muted" style={{ marginTop: 14, marginBottom: 0 }}>
+            🎰 몬스터 게임은 <strong>바이인 30,000 게임머니</strong>입니다(로그인 시 차감·리바이도 동일).
+            우승·입상하면 상금이 게임머니로 지급되고 <a href="/ranking">랭킹</a>에 반영됩니다.
+          </p>
+        )}
         <div style={{ marginTop: 14 }}>
           <button onClick={onCreate} disabled={busy}>
             {busy ? '생성 중…' : '방 만들기'}
