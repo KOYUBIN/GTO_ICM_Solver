@@ -13,6 +13,8 @@ export interface RoomPlayer {
   name: string;
   /** Seat index in the table; assigned on join. */
   seat: number;
+  /** Linked member account (username), if this player is logged in. */
+  account?: string;
 }
 
 /** How the table's blinds/stacks were configured. */
@@ -93,6 +95,8 @@ export interface Room {
   rebuyCount?: number;
   /** A final-table deal that ends the tournament (split among remaining players). */
   dealResult?: { method: 'icm' | 'chip'; amounts: Record<string, number>; at: string };
+  /** True once tournament prizes have been paid to member accounts (idempotent). */
+  settled?: boolean;
   /** Table chat, newest last (capped server-side). */
   chat?: ChatMsg[];
   /** Finished-hand records, newest last (capped server-side). */

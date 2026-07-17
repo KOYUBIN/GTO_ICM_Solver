@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createRoom, listPublicRooms } from '@/lib/roomStore';
+import { userByToken, SESSION_COOKIE } from '@/lib/auth';
 import type { RoomConfig } from '@/lib/rooms';
 
 export const runtime = 'nodejs';
@@ -37,12 +38,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: '블라인드/스택 설정이 올바르지 않습니다.' }, { status: 400 });
   }
 
-  const { room, playerId } = await createRoom(
-    (raw.name ?? '').toString(),
-    (raw.hostName ?? '').toString(),
-    config,
-  );
-  return NextResponse.json({ room, playerId }, { status: 201 });
+  const token = req.cookies.get(SESSION_COOKIE)?.value;
+  const me = token ? await userByToken(token).catch(() => null) : null;
+  try {
+    const { room, playerId } = await createRoom(
+      (raw.name ?? '').toString(),
+      (raw.hostName ?? '').toString(),
+      config,
+      me?.username,
+    );
+    return NextResponse.json({ room, playerId }, { status: 201 });
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 400 });
+  }
 }
 
 // GET /api/rooms -> public lobby list (sanitized summaries only).
