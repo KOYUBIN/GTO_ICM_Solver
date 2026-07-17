@@ -1,17 +1,21 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   allGridLabels,
   availableRfiVs3bet,
   availableVsRfi,
   cardsToString,
   comboCount,
+  equityVsRanges,
   getChart,
   labelToCombos,
+  openRaiseEv,
   quizBankCounts,
+  realizationFor,
   sampleChipEvQuizzes,
   sampleIcmQuizzes,
+  topPercentRange,
   POSITIONS_6MAX,
   type ActionLine,
   type ChipEvQuiz,
@@ -44,6 +48,26 @@ const LINE_SHORT: Record<ActionLine, string> = {
   'vs-RFI': 'vs RFI',
   'RFI-vs-3bet': 'vs 3벳',
 };
+
+/* ---- situation filters (상황 설정) ---- */
+
+/** '' = 랜덤. Hero-position options per line come from the charted pairs. */
+interface SpotFilter {
+  line: ActionLine | '';
+  heroPos: Position | '';
+}
+
+const VS_RFI_HEROES = [...new Set(availableVsRfi().map(([h]) => h))];
+const VS_3BET_HEROES = [...new Set(availableRfiVs3bet().map((p) => p.hero))];
+const RFI_HEROES = POSITIONS_6MAX.filter((p) => p !== 'BB');
+
+/** Hero positions selectable for a given line filter ('' = union of all). */
+function heroesFor(line: ActionLine | ''): Position[] {
+  if (line === 'RFI') return RFI_HEROES;
+  if (line === 'vs-RFI') return VS_RFI_HEROES;
+  if (line === 'RFI-vs-3bet') return VS_3BET_HEROES;
+  return [...new Set([...RFI_HEROES, ...VS_RFI_HEROES, ...VS_3BET_HEROES])];
+}
 
 /* ---- new-mode constants ---- */
 
@@ -264,21 +288,41 @@ function rebuildSpot(n: PreflopWrong): Spot {
  * pool is widened with all in-range cells — otherwise the same 1-2 hands
  * would repeat on most drills.
  */
-function randomSpot(): Spot {
-  const line = LINES[Math.floor(Math.random() * LINES.length)];
+function randomSpot(filter?: SpotFilter): Spot {
+  // 상황 설정: 라인/포지션이 지정되면 그 안에서만 뽑는다 ('' = 랜덤).
+  let line: ActionLine;
+  if (filter?.line) {
+    line = filter.line;
+  } else if (filter?.heroPos) {
+    // 포지션만 고정: 그 포지션이 존재하는 라인 중에서 랜덤.
+    const linesForHero = LINES.filter((l) => heroesFor(l).includes(filter.heroPos as Position));
+    line = linesForHero.length
+      ? linesForHero[Math.floor(Math.random() * linesForHero.length)]
+      : LINES[Math.floor(Math.random() * LINES.length)];
+  } else {
+    line = LINES[Math.floor(Math.random() * LINES.length)];
+  }
+  const wantHero = filter?.heroPos && heroesFor(line).includes(filter.heroPos as Position)
+    ? (filter.heroPos as Position)
+    : undefined;
+
   let heroPos: Position;
   let villainPos: Position | undefined;
   if (line === 'RFI') {
-    const pool = POSITIONS_6MAX.filter((p) => p !== 'BB');
+    const pool = wantHero ? [wantHero] : RFI_HEROES;
     heroPos = pool[Math.floor(Math.random() * pool.length)];
   } else if (line === 'vs-RFI') {
-    const pairs = availableVsRfi();
-    const [h, v] = pairs[Math.floor(Math.random() * pairs.length)];
+    const all = availableVsRfi();
+    const pairs = wantHero ? all.filter(([h]) => h === wantHero) : all;
+    const pool = pairs.length ? pairs : all;
+    const [h, v] = pool[Math.floor(Math.random() * pool.length)];
     heroPos = h;
     villainPos = v;
   } else {
-    const pairs = availableRfiVs3bet();
-    const p = pairs[Math.floor(Math.random() * pairs.length)];
+    const all = availableRfiVs3bet();
+    const pairs = wantHero ? all.filter((p) => p.hero === wantHero) : all;
+    const pool = pairs.length ? pairs : all;
+    const p = pool[Math.floor(Math.random() * pool.length)];
     heroPos = p.hero;
     villainPos = p.villain;
   }
@@ -316,6 +360,114 @@ function mixSummary(line: ActionLine, mix: Mix): string {
   if (line !== 'RFI') parts.push(`콜 ${Math.round(mix.call * 100)}%`);
   parts.push(`폴드 ${Math.round(mix.fold * 100)}%`);
   return parts.join(' · ');
+}
+
+/* ---- per-action EV (칩EV 근사) for the live preflop drill ---- */
+
+interface EvRow {
+  key: PreflopAction;
+  ev: number;
+}
+
+/** Players left to act behind a 6-max position (UTG=5 … BB=0). */
+function playersBehindOf(pos: Position): number {
+  const i = POSITIONS_6MAX.indexOf(pos);
+  return i < 0 ? 3 : POSITIONS_6MAX.length - 1 - i;
+}
+
+/** Raise-weighted range map from a chart (villain's opening range). */
+function raiseRangeOf(heroPos: Position): Map<string, number> {
+  const chart = getChart({ gameType: 'cash', stackBB: STACK_BB, heroPos, line: 'RFI' });
+  const range = new Map<string, number>();
+  for (const [label, m] of chart.hands) if ((m.raise ?? 0) > 0) range.set(label, m.raise);
+  return range;
+}
+
+/** Postflop acting order — later index acts last (= in position). */
+const POSTFLOP_ORDER: Position[] = ['SB', 'BB', 'UTG', 'MP', 'CO', 'BTN'];
+
+/** Blind already posted by a position (sunk at the decision point). */
+function blindOf(pos: Position | undefined): number {
+  return pos === 'BB' ? 1 : pos === 'SB' ? 0.5 : 0;
+}
+
+/**
+ * Heads-up equity realization from actual postflop position (spotev.ts
+ * semantics: ~0.9 in position, ~0.75 OOP non-blind, ~0.65 from the blinds).
+ */
+function matchupRealization(heroPos: Position, villainPos: Position | undefined): number {
+  if (!villainPos) return 0.85;
+  const heroIp = POSTFLOP_ORDER.indexOf(heroPos) > POSTFLOP_ORDER.indexOf(villainPos);
+  if (heroIp) return 0.9;
+  return blindOf(heroPos) > 0 ? 0.65 : 0.75;
+}
+
+/**
+ * Per-action chip-EV approximation for a drill spot (relative to fold = 0,
+ * sunk chips — including posted blinds — ignored). Reuses the same coarse
+ * single-caller models as the charts page: openRaiseEv for opens;
+ * equity-vs-range pot-share models for facing an open / a 3-bet.
+ * Directional teaching aid, NOT solver output.
+ *
+ * Bet-size assumptions: open 2.5bb, 3bet to 8bb, 4bet to 20bb; a fixed 55%
+ * fold-through vs re-aggression; re-aggressor continue ranges as global top-%.
+ * Blind-aware: a blind hero's posted chips are sunk, so calls cost less and
+ * pots exclude double-counted posts.
+ */
+function preflopActionEvs(spot: Spot): EvRow[] {
+  const hero = spot.combo;
+  const FE = 0.55; // 상대가 리레이즈에 폴드하는 근사 빈도
+
+  if (spot.line === 'RFI') {
+    const behind = Math.max(1, playersBehindOf(spot.heroPos));
+    const raise = openRaiseEv(spot.label, {
+      raiseTo: 2.5,
+      continuePercent: 18,
+      playersBehind: behind,
+      realization: realizationFor(behind),
+      iterations: 2500,
+      seed: 99,
+    });
+    return [
+      { key: 'raise', ev: raise },
+      { key: 'fold', ev: 0 },
+    ];
+  }
+
+  const realization = matchupRealization(spot.heroPos, spot.villainPos);
+  const heroBlind = blindOf(spot.heroPos);
+  const villainBlind = blindOf(spot.villainPos);
+  // 히어로/빌런이 낸 블라인드는 각자의 베팅(콜·오픈·3벳)에 흡수되므로 데드머니에서 제외.
+  const otherDead = 1.5 - heroBlind - villainBlind;
+
+  if (spot.line === 'vs-RFI') {
+    // 상대가 2.5bb 오픈. 블라인드 히어로는 이미 낸 만큼 콜이 싸다 (BB 콜 1.5, 일반 2.5).
+    const openRange = spot.villainPos ? raiseRangeOf(spot.villainPos) : topPercentRange(20);
+    const eqOpen = equityVsRanges(hero, [openRange], { iterations: 2500, seed: 7 }).equities[0];
+    const callEv = realization * eqOpen * (5.0 + otherDead) - (2.5 - heroBlind);
+    // 3벳(8bb): 상대는 강한 상위 레인지로만 컨티뉴. 폴드시킨 팟엔 내 블라인드 회수 포함.
+    const eqCont = equityVsRanges(hero, [topPercentRange(8)], { iterations: 2500, seed: 8 }).equities[0];
+    const uncontested = 2.5 + otherDead + heroBlind;
+    const threeBetEv =
+      FE * uncontested + (1 - FE) * (realization * eqCont * (16.0 + otherDead) - (8 - heroBlind));
+    return [
+      { key: 'raise', ev: threeBetEv },
+      { key: 'call', ev: callEv },
+      { key: 'fold', ev: 0 },
+    ];
+  }
+
+  // vs-3bet: 내가 2.5bb 오픈(매몰) → 상대 8bb 3벳. 현재 팟 = 2.5 + 8 + otherDead.
+  const eq3 = equityVsRanges(hero, [topPercentRange(8)], { iterations: 2500, seed: 9 }).equities[0];
+  const callEv = realization * eq3 * (16 + otherDead) - 5.5;
+  const eq4 = equityVsRanges(hero, [topPercentRange(5)], { iterations: 2500, seed: 10 }).equities[0];
+  const potNow = 10.5 + otherDead;
+  const fourBetEv = FE * potNow + (1 - FE) * (realization * eq4 * (40 + otherDead) - 17.5);
+  return [
+    { key: 'raise', ev: fourBetEv },
+    { key: 'call', ev: callEv },
+    { key: 'fold', ev: 0 },
+  ];
 }
 
 /* ---- new-mode helpers ---- */
@@ -426,17 +578,31 @@ function PositionRow({
 
 type Graded = (mode: 'chipev' | 'icm', correct: boolean, wrong: QuizWrong | null) => void;
 
+const CHIPEV_LINES = [...new Set(CHIPEV_POOL.map((q) => q.line))];
+const CHIPEV_STACKS = [...new Set(CHIPEV_POOL.map((q) => q.stackBB))].sort((a, b) => a - b);
+
 function ChipEvDrill({ onGraded }: { onGraded: Graded }) {
   const [quiz, setQuiz] = useState<ChipEvQuiz | null>(null);
   const [combo, setCombo] = useState('');
   const [picked, setPicked] = useState<string | null>(null);
+  // 상황 설정 ('' = 전체).
+  const [fLine, setFLine] = useState('');
+  const [fStack, setFStack] = useState('');
 
-  function draw() {
-    const q = CHIPEV_POOL[Math.floor(Math.random() * CHIPEV_POOL.length)];
+  function matches(l: string, s: string) {
+    return CHIPEV_POOL.filter((q) => (!l || q.line === l) && (!s || q.stackBB === Number(s)));
+  }
+
+  function draw(l = fLine, s = fStack) {
+    const filtered = matches(l, s);
+    const pool = filtered.length ? filtered : CHIPEV_POOL;
+    const q = pool[Math.floor(Math.random() * pool.length)];
     setQuiz(q);
     setCombo(randomCombo(q.hand));
     setPicked(null);
   }
+
+  const filteredCount = matches(fLine, fStack).length;
 
   // Draw client-side (avoids SSR/hydration RNG mismatch).
   useEffect(() => {
@@ -473,6 +639,34 @@ function ChipEvDrill({ onGraded }: { onGraded: Graded }) {
 
   return (
     <>
+      {/* 상황 설정 */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 12, padding: '8px 10px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 10 }}>
+        <div style={{ flex: '1 1 120px' }}>
+          <label style={{ fontSize: 12 }}>라인</label>
+          <select value={fLine} onChange={(e) => { setFLine(e.target.value); draw(e.target.value, fStack); }}>
+            <option value="">전체 (랜덤)</option>
+            {CHIPEV_LINES.map((l) => (
+              <option key={l} value={l}>{CHIP_LINE_KO[l] ?? l}</option>
+            ))}
+          </select>
+        </div>
+        <div style={{ flex: '1 1 120px' }}>
+          <label style={{ fontSize: 12 }}>스택</label>
+          <select value={fStack} onChange={(e) => { setFStack(e.target.value); draw(fLine, e.target.value); }}>
+            <option value="">전체 (랜덤)</option>
+            {CHIPEV_STACKS.map((s) => (
+              <option key={s} value={String(s)}>{s}bb</option>
+            ))}
+          </select>
+        </div>
+        <button className="secondary" onClick={() => draw()} disabled={picked !== null} style={{ padding: '8px 14px', fontSize: 13 }}>
+          🔀 다른 문제
+        </button>
+        <span className="muted" style={{ fontSize: 12, alignSelf: 'center' }}>
+          {filteredCount > 0 ? `해당 상황 ${filteredCount}문제` : '조합 없음 — 전체에서 출제'}
+        </span>
+      </div>
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
         <span className="pill" style={{ background: 'rgba(88,166,255,0.14)', color: 'var(--blue)' }}>
           {CHIP_LINE_KO[quiz.line] ?? quiz.line} · {quiz.stackBB}bb
@@ -607,7 +801,7 @@ function ChipEvDrill({ onGraded }: { onGraded: Graded }) {
           )}
 
           <div style={{ marginTop: hasEv || quiz.note ? 0 : 12 }}>
-            <button onClick={draw}>다음 문제 ▶</button>
+            <button onClick={() => draw()}>다음 문제 ▶</button>
           </div>
         </div>
       )}
@@ -617,17 +811,42 @@ function ChipEvDrill({ onGraded }: { onGraded: Graded }) {
 
 /* --------------------------- ICM quiz drill ----------------------------- */
 
+const ICM_PAYOUT_NAMES = [...new Set(ICM_POOL.map((q) => q.payoutName))];
+const ICM_BUCKETS = [
+  { id: 'short', ko: '숏 (≤10bb)', test: (bb: number) => bb <= 10 },
+  { id: 'mid', ko: '미들 (10~20bb)', test: (bb: number) => bb > 10 && bb <= 20 },
+  { id: 'deep', ko: '딥 (>20bb)', test: (bb: number) => bb > 20 },
+];
+
+function heroBBOf(q: IcmQuiz): number {
+  return q.blinds.bb > 0 ? q.stacks[q.heroIdx] / q.blinds.bb : 0;
+}
+
 function IcmDrill({ onGraded }: { onGraded: Graded }) {
   const [quiz, setQuiz] = useState<IcmQuiz | null>(null);
   const [combo, setCombo] = useState('');
   const [picked, setPicked] = useState<'shove' | 'fold' | null>(null);
+  // 상황 설정 ('' = 전체).
+  const [fPayout, setFPayout] = useState('');
+  const [fBucket, setFBucket] = useState('');
 
-  function draw() {
-    const q = ICM_POOL[Math.floor(Math.random() * ICM_POOL.length)];
+  function matches(p: string, b: string) {
+    const bucket = ICM_BUCKETS.find((x) => x.id === b);
+    return ICM_POOL.filter(
+      (q) => (!p || q.payoutName === p) && (!bucket || bucket.test(heroBBOf(q))),
+    );
+  }
+
+  function draw(p = fPayout, b = fBucket) {
+    const filtered = matches(p, b);
+    const pool = filtered.length ? filtered : ICM_POOL;
+    const q = pool[Math.floor(Math.random() * pool.length)];
     setQuiz(q);
     setCombo(randomCombo(q.hand));
     setPicked(null);
   }
+
+  const filteredCount = matches(fPayout, fBucket).length;
 
   useEffect(() => {
     draw();
@@ -661,6 +880,34 @@ function IcmDrill({ onGraded }: { onGraded: Graded }) {
 
   return (
     <>
+      {/* 상황 설정 */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 12, padding: '8px 10px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 10 }}>
+        <div style={{ flex: '1 1 140px' }}>
+          <label style={{ fontSize: 12 }}>상금 구조</label>
+          <select value={fPayout} onChange={(e) => { setFPayout(e.target.value); draw(e.target.value, fBucket); }}>
+            <option value="">전체 (랜덤)</option>
+            {ICM_PAYOUT_NAMES.map((p) => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
+        </div>
+        <div style={{ flex: '1 1 130px' }}>
+          <label style={{ fontSize: 12 }}>내 스택</label>
+          <select value={fBucket} onChange={(e) => { setFBucket(e.target.value); draw(fPayout, e.target.value); }}>
+            <option value="">전체 (랜덤)</option>
+            {ICM_BUCKETS.map((b) => (
+              <option key={b.id} value={b.id}>{b.ko}</option>
+            ))}
+          </select>
+        </div>
+        <button className="secondary" onClick={() => draw()} disabled={picked !== null} style={{ padding: '8px 14px', fontSize: 13 }}>
+          🔀 다른 문제
+        </button>
+        <span className="muted" style={{ fontSize: 12, alignSelf: 'center' }}>
+          {filteredCount > 0 ? `해당 상황 ${filteredCount}문제` : '조합 없음 — 전체에서 출제'}
+        </span>
+      </div>
+
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
         <span className="pill" style={{ background: 'rgba(88,166,255,0.14)', color: 'var(--blue)' }}>
           {quiz.payoutName}
@@ -812,7 +1059,7 @@ function IcmDrill({ onGraded }: { onGraded: Graded }) {
           )}
 
           <div style={{ marginTop: quiz.note ? 0 : 12 }}>
-            <button onClick={draw}>다음 문제 ▶</button>
+            <button onClick={() => draw()}>다음 문제 ▶</button>
           </div>
         </div>
       )}
@@ -831,6 +1078,13 @@ export default function TrainerPage() {
   const [autoNext, setAutoNext] = useState(false);
   const timerRef = useRef<number | null>(null);
 
+  // 프리플랍 상황 설정 ('' = 랜덤).
+  const [spotFilter, setSpotFilter] = useState<SpotFilter>({ line: '', heroPos: '' });
+
+  // 이번 세션 집계 + 그만하기 상태.
+  const [session, setSession] = useState({ total: 0, correct: 0, earned: 0 });
+  const [stopped, setStopped] = useState(false);
+
   // 정답을 맞히면 게임머니 지급 (로그인 시, 서버 일일 상한 적용).
   const [earnFlash, setEarnFlash] = useState<number | null>(null);
   const earnTimerRef = useRef<number | null>(null);
@@ -843,6 +1097,7 @@ export default function TrainerPage() {
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (d && d.earned > 0) {
+          setSession((s) => ({ ...s, earned: s.earned + d.earned }));
           setEarnFlash(d.earned);
           if (earnTimerRef.current) window.clearTimeout(earnTimerRef.current);
           earnTimerRef.current = window.setTimeout(() => setEarnFlash(null), 1500);
@@ -867,15 +1122,29 @@ export default function TrainerPage() {
     }
   }
 
-  function nextSpot() {
+  function nextSpot(filter: SpotFilter = spotFilter) {
     clearTimer();
     setPicked(null);
     if (queue.length) {
       setSpot(queue[0]);
       setQueue(queue.slice(1));
     } else {
-      setSpot(randomSpot());
+      setSpot(randomSpot(filter));
     }
+  }
+
+  /** 상황 설정 변경: 현재 문제를 즉시 새 조건으로 교체 (채점 없음). */
+  function changeSituation(patch: Partial<SpotFilter>) {
+    const next = { ...spotFilter, ...patch };
+    // 라인이 바뀌어 현재 포지션이 불가능해지면 포지션은 랜덤으로 되돌림.
+    if (next.heroPos && !heroesFor(next.line).includes(next.heroPos as Position)) {
+      next.heroPos = '';
+    }
+    setSpotFilter(next);
+    clearTimer();
+    setQueue([]); // 오답 복습 큐는 조건과 무관하므로 비움
+    setPicked(null);
+    setSpot(randomSpot(next));
   }
 
   function answer(a: PreflopAction) {
@@ -919,8 +1188,9 @@ export default function TrainerPage() {
     };
     setStats(next);
     saveStats(next);
+    setSession((s) => ({ ...s, total: s.total + 1, correct: s.correct + (correct ? 1 : 0) }));
     if (correct) earnReward();
-    if (autoNext) timerRef.current = window.setTimeout(nextSpot, 1800);
+    if (autoNext) timerRef.current = window.setTimeout(() => nextSpot(), 1800);
   }
 
   /** Shared grader for the chip-EV / ICM quiz modes (functional update). */
@@ -943,6 +1213,7 @@ export default function TrainerPage() {
       saveStats(next);
       return next;
     });
+    setSession((s) => ({ ...s, total: s.total + 1, correct: s.correct + (correct ? 1 : 0) }));
     if (correct) earnReward();
   }
 
@@ -950,6 +1221,7 @@ export default function TrainerPage() {
     const notes = stats.wrong.filter((w): w is PreflopWrong => w.mode === 'preflop');
     if (!notes.length) return;
     clearTimer();
+    setStopped(false); // 세션 요약 화면에서 눌러도 바로 복습 드릴로 진입
     const spots = notes.map(rebuildSpot);
     setMode('preflop');
     setSpot(spots[0]);
@@ -974,6 +1246,14 @@ export default function TrainerPage() {
   const wasCorrect = spot && picked !== null ? spot.mix[picked] >= bestFreq * 0.5 : false;
   const evLoss = spot && picked !== null ? Math.max(0, bestFreq - spot.mix[picked]) : 0;
   const hasPreflopWrong = stats.wrong.some((w) => w.mode === 'preflop');
+  const sessionAccuracy = session.total ? Math.round((session.correct / session.total) * 100) : 0;
+
+  // 답변 후에만 액션별 EV 근사 계산 (몬테카를로 — 답 전에 돌리면 낭비).
+  const evRows = useMemo(
+    () => (mode === 'preflop' && spot && picked !== null ? preflopActionEvs(spot) : null),
+    [mode, spot, picked],
+  );
+  const evBest = evRows ? evRows.reduce((m, r) => (r.ev > m.ev ? r : m), evRows[0]).key : null;
 
   return (
     <div className="container" style={{ maxWidth: 860 }}>
@@ -1031,6 +1311,24 @@ export default function TrainerPage() {
 
       {/* Session stats strip */}
       <div className="card" style={{ padding: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+          <span className="muted" style={{ fontSize: 13 }}>
+            이번 세션: <strong style={{ color: 'var(--text)' }}>{session.total}문제</strong>
+            {session.total > 0 && <> · 정답률 <strong style={{ color: 'var(--text)' }}>{sessionAccuracy}%</strong></>}
+            {session.earned > 0 && (
+              <> · <strong style={{ color: 'var(--warn)' }}>💰 +{session.earned.toLocaleString('ko-KR')}</strong></>
+            )}
+          </span>
+          {!stopped && (
+            <button
+              className="secondary"
+              onClick={() => { clearTimer(); setStopped(true); }}
+              style={{ padding: '6px 14px', fontSize: 13 }}
+            >
+              ⏹ 그만하기
+            </button>
+          )}
+        </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           {[
             ['문제 수', String(stats.total)],
@@ -1096,8 +1394,52 @@ export default function TrainerPage() {
         )}
       </div>
 
-      {/* Drill card */}
+      {/* Drill card (or session summary when stopped). The drills stay
+          MOUNTED while stopped (hidden) so their question + filters survive
+          '이어서 하기'. */}
       <div className="card">
+        {stopped && (
+          <div style={{ textAlign: 'center', padding: '10px 0' }}>
+            <h2 style={{ margin: '0 0 4px' }}>🏁 세션 종료</h2>
+            <p className="muted" style={{ margin: '0 0 16px' }}>수고하셨습니다! 이번 세션 결과입니다.</p>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center', marginBottom: 18 }}>
+              {[
+                ['푼 문제', `${session.total}개`],
+                ['정답률', session.total ? `${sessionAccuracy}%` : '—'],
+                ['획득 게임머니', session.earned > 0 ? `💰 +${session.earned.toLocaleString('ko-KR')}` : '0'],
+              ].map(([k, v]) => (
+                <div
+                  key={k}
+                  style={{
+                    flex: '1 1 130px',
+                    maxWidth: 200,
+                    background: 'var(--bg-elevated)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 10,
+                    padding: '12px 14px',
+                  }}
+                >
+                  <div className="muted" style={{ fontSize: 12 }}>{k}</div>
+                  <div style={{ fontSize: 20, fontWeight: 800 }}>{v}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+              <button onClick={() => setStopped(false)}>▶ 이어서 하기</button>
+              <button
+                className="secondary"
+                onClick={() => {
+                  setSession({ total: 0, correct: 0, earned: 0 });
+                  setStopped(false);
+                  if (mode === 'preflop') nextSpot();
+                }}
+              >
+                🔄 새 세션 시작
+              </button>
+            </div>
+          </div>
+        )}
+        <div hidden={stopped}>
         {mode === 'chipev' ? (
           <ChipEvDrill onGraded={recordQuiz} />
         ) : mode === 'icm' ? (
@@ -1106,6 +1448,42 @@ export default function TrainerPage() {
           <p className="muted">문제를 생성하는 중…</p>
         ) : (
           <>
+            {/* 상황 설정 */}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 12, padding: '8px 10px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 10 }}>
+              <div style={{ flex: '1 1 140px' }}>
+                <label style={{ fontSize: 12 }}>라인</label>
+                <select
+                  value={spotFilter.line}
+                  onChange={(e) => changeSituation({ line: e.target.value as ActionLine | '' })}
+                >
+                  <option value="">전체 (랜덤)</option>
+                  {LINES.map((l) => (
+                    <option key={l} value={l}>{LINE_KO[l]}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ flex: '1 1 130px' }}>
+                <label style={{ fontSize: 12 }}>내 포지션</label>
+                <select
+                  value={spotFilter.heroPos}
+                  onChange={(e) => changeSituation({ heroPos: e.target.value as Position | '' })}
+                >
+                  <option value="">전체 (랜덤)</option>
+                  {heroesFor(spotFilter.line).map((p) => (
+                    <option key={p} value={p}>{p}</option>
+                  ))}
+                </select>
+              </div>
+              <button
+                className="secondary"
+                onClick={() => nextSpot()}
+                disabled={picked !== null}
+                style={{ padding: '8px 14px', fontSize: 13 }}
+              >
+                🔀 다른 문제
+              </button>
+            </div>
+
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
               <span className="pill" style={{ background: 'rgba(88,166,255,0.14)', color: 'var(--blue)' }}>
                 {LINE_KO[spot.line]} · {STACK_BB}bb
@@ -1249,6 +1627,46 @@ export default function TrainerPage() {
                   })}
                 </div>
 
+                {/* 액션별 EV 근사 */}
+                {evRows && (
+                  <div style={{ marginTop: 12, padding: '10px 12px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 10 }}>
+                    <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+                      액션별 기대이득(EV) 근사 — 칩EV, bb 단위, 폴드 = 0 기준
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {evRows.map((r) => {
+                        const isBest = r.key === evBest;
+                        return (
+                          <div
+                            key={r.key}
+                            style={{
+                              flex: '1 1 90px',
+                              textAlign: 'center',
+                              padding: '8px 10px',
+                              borderRadius: 8,
+                              border: isBest ? `2px solid ${ACTION_COLORS[r.key]}` : '1px solid var(--border)',
+                              background: isBest ? `${ACTION_COLORS[r.key]}14` : 'var(--bg)',
+                            }}
+                          >
+                            <div style={{ fontSize: 12, fontWeight: 700, color: ACTION_COLORS[r.key] }}>
+                              {actionName(spot.line, r.key)}
+                              {isBest ? ' ★' : ''}
+                            </div>
+                            <div style={{ fontSize: 16, fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: r.ev > 0.005 ? 'var(--accent)' : r.ev < -0.005 ? 'var(--danger)' : 'var(--text)' }}>
+                              {fmtBB(r.ev)}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+                      * 단순화된 베팅 트리(오픈 2.5bb·3벳 8bb·4벳 20bb)·고정 폴드율(55%) 가정의 몬테카를로
+                      근사입니다. 리레이즈 EV는 블러프 가치가 후하게 잡힐 수 있으니 — 매번 하면 상대가
+                      조정합니다 — 위 GTO 빈도와 함께 참고하세요.
+                    </div>
+                  </div>
+                )}
+
                 <p className="muted" style={{ fontSize: 13, margin: '10px 0 12px' }}>
                   13×13 그리드에서 <strong style={{ color: 'var(--text)' }}>{spot.label}</strong> 셀은 «{spot.chartLabel}» 차트 기준{' '}
                   {mixSummary(spot.line, spot.mix)} 믹스입니다 — 최적 액션은{' '}
@@ -1259,7 +1677,7 @@ export default function TrainerPage() {
                 </p>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                  <button onClick={nextSpot}>다음 문제 ▶</button>
+                  <button onClick={() => nextSpot()}>다음 문제 ▶</button>
                   <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--text-dim)', cursor: 'pointer' }}>
                     <input
                       type="checkbox"
@@ -1274,6 +1692,7 @@ export default function TrainerPage() {
             )}
           </>
         )}
+        </div>
       </div>
 
       {/* Wrong-answer notebook */}
