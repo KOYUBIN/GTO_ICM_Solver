@@ -118,6 +118,7 @@ export function Table({
   onDeal,
   onLeave,
   onRebuy,
+  onMakeDeal,
 }: {
   room: RoomView;
   youId: string | null; // null = spectator
@@ -125,6 +126,7 @@ export function Table({
   onDeal: () => void;
   onLeave: () => void;
   onRebuy: () => void;
+  onMakeDeal: (method: 'icm' | 'chip') => void;
 }) {
   const state = room.gameState;
   const isHost = !!youId && room.hostId === youId;
@@ -208,6 +210,9 @@ export function Table({
                 레지 마감 ({room.clock?.lateRegLevel}레벨 종료) — 더 이상 리바이할 수 없습니다.
               </span>
             </div>
+          )}
+          {!room.gameOver && room.canDeal && room.dealPreview && (
+            <DealPanel preview={room.dealPreview} isHost={isHost} onMakeDeal={onMakeDeal} />
           )}
           {room.gameOver ? (
             <div className="card" style={{ border: '2px solid var(--warn)' }}>
@@ -786,6 +791,62 @@ function MyActions({
 }
 
 // ---------- misc panels ----------
+
+function DealPanel({
+  preview,
+  isHost,
+  onMakeDeal,
+}: {
+  preview: NonNullable<RoomView['dealPreview']>;
+  isHost: boolean;
+  onMakeDeal: (method: 'icm' | 'chip') => void;
+}) {
+  const fmt = (x: number) => `${Math.round(x).toLocaleString('ko-KR')}원`;
+  return (
+    <div className="card" style={{ border: '2px solid var(--accent, #58a6ff)' }}>
+      <h3 style={{ margin: '2px 0 6px' }}>🤝 파이널 딜 (상금 나누기)</h3>
+      <p className="muted" style={{ marginTop: 0 }}>
+        남은 {preview.ids.length}명이 지금 딜하면 각자 받는 금액입니다. 총 상금 {fmt(preview.pool)} ·
+        칩찹(칩 비율) vs ICM(생존 가치) 중 선택.
+      </p>
+      <div className="table-scroll">
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+          <thead>
+            <tr style={{ color: 'var(--text-dim)', textAlign: 'right' }}>
+              <th style={{ textAlign: 'left', padding: '6px 8px 6px 0' }}>플레이어</th>
+              <th style={{ padding: '6px 8px' }}>스택</th>
+              <th style={{ padding: '6px 8px' }}>칩찹</th>
+              <th style={{ padding: '6px 0 6px 8px' }}>ICM</th>
+            </tr>
+          </thead>
+          <tbody>
+            {preview.names.map((name, i) => (
+              <tr key={i} style={{ borderTop: '1px solid var(--border)', textAlign: 'right' }}>
+                <td style={{ textAlign: 'left', padding: '8px 8px 8px 0', fontWeight: 600 }}>{name}</td>
+                <td style={{ padding: '8px' }}>{preview.stacks[i].toLocaleString('ko-KR')}</td>
+                <td style={{ padding: '8px' }}>{fmt(preview.chip[i])}</td>
+                <td style={{ padding: '8px 0 8px 8px', fontWeight: 700 }}>{fmt(preview.icm[i])}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {isHost ? (
+        <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button onClick={() => onMakeDeal('chip')}>칩찹으로 종료</button>
+          <button onClick={() => onMakeDeal('icm')}>ICM으로 종료</button>
+          <span className="muted" style={{ alignSelf: 'center' }}>
+            종료하면 게임이 끝나고 최종 순위·상금이 확정됩니다.
+          </span>
+        </div>
+      ) : (
+        <p className="muted" style={{ marginBottom: 0, marginTop: 10 }}>
+          방장이 딜을 확정하면 게임이 종료됩니다.
+        </p>
+      )}
+    </div>
+  );
+}
 
 function ClockBar({ clock }: { clock: NonNullable<RoomView['clock']> }) {
   const mm = Math.floor(clock.secondsLeft / 60);

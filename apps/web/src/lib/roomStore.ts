@@ -31,6 +31,7 @@ import {
   monsterPaidCount,
   monsterPrizePool,
   monsterPayouts,
+  dealCalc,
   type TableState,
   type Action,
   type BlindLevel,
@@ -292,13 +293,34 @@ function recordBusts(room: Room): void {
   }
 }
 
-/** Final standings (place 1 = winner) with an optional prize estimate. */
-function computeStandings(room: Room, winnerId: string | undefined) {
-  const nameOf = (id: string) =>
+function playerName(room: Room, id: string): string {
+  return (
     room.players.find((p) => p.id === id)?.name ??
     room.gameState?.seats.find((s) => s.id === id)?.name ??
-    '?';
+    '?'
+  );
+}
+
+/** Final standings (place 1 = winner) with an optional prize estimate. */
+function computeStandings(room: Room, winnerId: string | undefined) {
   const order = room.finishOrder ?? [];
+  const prizes = tournamentPrizes(room);
+
+  // Deal: remaining players share the top prizes by the agreed amounts; the
+  // already-eliminated keep their ladder finishes below them.
+  if (room.dealResult) {
+    const amounts = room.dealResult.amounts;
+    const dealt = Object.keys(amounts).sort((a, b) => amounts[b] - amounts[a]);
+    const ranked = [...dealt];
+    for (let i = order.length - 1; i >= 0; i--) if (!ranked.includes(order[i])) ranked.push(order[i]);
+    for (const p of room.players) if (!ranked.includes(p.id)) ranked.push(p.id);
+    return ranked.map((id, i) => ({
+      place: i + 1,
+      name: playerName(room, id),
+      prize: i < dealt.length ? amounts[id] : prizes[i],
+    }));
+  }
+
   const ranked: string[] = [];
   const push = (id: string | undefined) => {
     if (id && !ranked.includes(id)) ranked.push(id);
@@ -306,8 +328,36 @@ function computeStandings(room: Room, winnerId: string | undefined) {
   push(winnerId);
   for (let i = order.length - 1; i >= 0; i--) push(order[i]); // 최근 탈락 = 상위
   for (const p of room.players) push(p.id); // 혹시 누락된 현재 플레이어
-  const prizes = tournamentPrizes(room);
-  return ranked.map((id, i) => ({ place: i + 1, name: nameOf(id), prize: prizes[i] }));
+  return ranked.map((id, i) => ({ place: i + 1, name: playerName(room, id), prize: prizes[i] }));
+}
+
+/** Remaining players (chips > 0) and the monster prize pool, or null if N/A. */
+function dealContext(
+  room: Room,
+): { ids: string[]; names: string[]; stacks: number[]; prizesMoney: number[]; pool: number } | null {
+  if (room.config.presetId !== 'monster' || !room.gameState) return null;
+  const alive = room.gameState.seats.filter(
+    (s) => s.stack > 0 && s.status !== 'empty' && room.players.some((p) => p.id === s.id),
+  );
+  if (alive.length < 2 || alive.length > 6) return null; // 파이널 테이블 범위에서만
+  const entrants = room.players.length + (room.left?.length ?? 0);
+  const pool = monsterPrizePool(entrants, room.rebuyCount ?? 0);
+  const prizesMoney = monsterPayouts(monsterPaidCount(entrants)).map((p) => p * pool);
+  return {
+    ids: alive.map((s) => s.id),
+    names: alive.map((s) => s.name),
+    stacks: alive.map((s) => s.stack),
+    prizesMoney,
+    pool,
+  };
+}
+
+/** Chip-chop vs ICM split preview for the remaining players. */
+function computeDealPreview(room: Room): RoomView['dealPreview'] | undefined {
+  const ctx = dealContext(room);
+  if (!ctx) return undefined;
+  const d = dealCalc(ctx.stacks, ctx.prizesMoney);
+  return { ids: ctx.ids, names: ctx.names, stacks: ctx.stacks, chip: d.chipChop, icm: d.icm, pool: ctx.pool };
 }
 
 /** Prize per finishing place. Only the 몬스터 프리셋에 대해 상금을 추정합니다. */
@@ -392,9 +442,14 @@ export function toView(room: Room, viewerId?: string): RoomView {
         ? new Date(room.actingSince).getTime() + timeout * 1000
         : null;
 
-    // Game over (between hands): either everyone left but one, or — in a
-    // no-rebuy tournament — only one player still has chips.
-    if (!room.gameState.handInProgress && room.gameState.handNumber > 0) {
+    // A completed deal ends the tournament immediately.
+    if (room.dealResult) {
+      view.gameOver = true;
+      view.standings = computeStandings(room, undefined);
+      view.overallWinner = view.standings[0]?.name;
+    } else if (!room.gameState.handInProgress && room.gameState.handNumber > 0) {
+      // Game over (between hands): either everyone left but one, or — in a
+      // no-rebuy tournament — only one player still has chips.
       const withChips = room.players.filter((p) => {
         const seat = room.gameState!.seats.find((s) => s.id === p.id);
         return !seat || seat.stack > 0; // unseated joiners count as in
@@ -410,6 +465,13 @@ export function toView(room: Room, viewerId?: string): RoomView {
         const winner = withChips[0] ?? room.players[0];
         view.overallWinner = winner?.name;
         view.standings = computeStandings(room, winner?.id);
+      } else {
+        // Offer a final-table deal (monster, 2~6 left) between hands.
+        const preview = computeDealPreview(room);
+        if (preview) {
+          view.canDeal = true;
+          view.dealPreview = preview;
+        }
       }
     }
   }
@@ -592,6 +654,31 @@ export async function rebuyPlayer(id: string, playerId: string): Promise<Room | 
     room.finishOrder = room.finishOrder.filter((id) => id !== playerId);
   }
   room.rebuyCount = (room.rebuyCount ?? 0) + 1;
+  room.updatedAt = new Date().toISOString();
+  await persist(room, expected);
+  return room;
+}
+
+/** Host ends the tournament with a final-table deal (chip-chop or ICM split). */
+export async function makeDeal(
+  id: string,
+  playerId: string,
+  method: 'icm' | 'chip',
+): Promise<Room | undefined> {
+  const code = id.toUpperCase();
+  const room = await getRoom(code);
+  if (!room) return undefined;
+  if (room.hostId !== playerId) throw new Error('방장만 딜을 확정할 수 있습니다.');
+  if (room.dealResult) throw new Error('이미 딜로 종료된 게임입니다.');
+  if (room.gameState?.handInProgress) throw new Error('핸드가 끝난 뒤에 딜할 수 있습니다.');
+  const ctx = dealContext(room);
+  if (!ctx) throw new Error('지금은 딜을 할 수 없습니다 (파이널 2~6인, 핸드 사이에만 가능).');
+  const d = dealCalc(ctx.stacks, ctx.prizesMoney);
+  const split = method === 'icm' ? d.icm : d.chipChop;
+  const amounts: Record<string, number> = {};
+  ctx.ids.forEach((pid, i) => (amounts[pid] = Math.round(split[i])));
+  const expected = room.updatedAt;
+  room.dealResult = { method, amounts, at: new Date().toISOString() };
   room.updatedAt = new Date().toISOString();
   await persist(room, expected);
   return room;
