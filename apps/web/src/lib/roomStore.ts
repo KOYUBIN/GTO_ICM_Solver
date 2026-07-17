@@ -32,11 +32,13 @@ import {
   monsterPrizePool,
   monsterPayouts,
   dealCalc,
+  MONSTER_GAME,
   type TableState,
   type Action,
   type BlindLevel,
 } from '@gto/engine';
 import { cardsToString } from '@gto/engine';
+import { spend, awardPrize } from './auth';
 import type { Room, RoomConfig, RoomView, TournamentClock, ChatMsg, HandRecord, PublicRoomSummary } from './rooms';
 
 const usePg = HAS_PG;
@@ -76,14 +78,19 @@ function resolveRebuyMeta(config: RoomConfig): { rebuyStack?: number; lateRegLev
   };
 }
 
-function newRoom(name: string, hostName: string, config: RoomConfig): { room: Room; playerId: string } {
+function newRoom(
+  name: string,
+  hostName: string,
+  config: RoomConfig,
+  account?: string,
+): { room: Room; playerId: string } {
   const hostId = genId('u');
   const now = new Date().toISOString();
   const room: Room = {
     id: genCode(),
     name: name || '홀덤 테이블',
     hostId,
-    players: [{ id: hostId, name: hostName || '호스트', seat: 0 }],
+    players: [{ id: hostId, name: hostName || '호스트', seat: 0, account }],
     config: {
       ...config,
       levels: resolveLevels(config),
@@ -137,13 +144,18 @@ function computeClock(room: Room): TournamentClock | null {
 }
 
 /** Add a player to a room (mutates and returns the new player's id), or null. */
-function addPlayer(room: Room, name: string): string | null {
+function addPlayer(room: Room, name: string, account?: string): string | null {
   if (room.players.length >= 9) return null;
   // Block joins mid-hand to keep seating stable; they can join next hand.
   const id = genId('u');
-  room.players.push({ id, name: name || `P${room.players.length}`, seat: room.players.length });
+  room.players.push({ id, name: name || `P${room.players.length}`, seat: room.players.length, account });
   room.updatedAt = new Date().toISOString();
   return id;
+}
+
+/** The monster buy-in in game money, or 0 for non-monster/free tables. */
+function buyInOf(config: RoomConfig): number {
+  return config.presetId === 'monster' ? MONSTER_GAME.buyIn : 0;
 }
 
 /** Build (or rebuild) the engine table from the room's players + config. */
@@ -315,6 +327,7 @@ function computeStandings(room: Room, winnerId: string | undefined) {
     for (let i = order.length - 1; i >= 0; i--) if (!ranked.includes(order[i])) ranked.push(order[i]);
     for (const p of room.players) if (!ranked.includes(p.id)) ranked.push(p.id);
     return ranked.map((id, i) => ({
+      id,
       place: i + 1,
       name: playerName(room, id),
       prize: i < dealt.length ? amounts[id] : prizes[i],
@@ -328,7 +341,52 @@ function computeStandings(room: Room, winnerId: string | undefined) {
   push(winnerId);
   for (let i = order.length - 1; i >= 0; i--) push(order[i]); // 최근 탈락 = 상위
   for (const p of room.players) push(p.id); // 혹시 누락된 현재 플레이어
-  return ranked.map((id, i) => ({ place: i + 1, name: playerName(room, id), prize: prizes[i] }));
+  return ranked.map((id, i) => ({ id, place: i + 1, name: playerName(room, id), prize: prizes[i] }));
+}
+
+/** Whether the tournament is over, and the winner's id if so. */
+function gameOverResult(room: Room): { over: boolean; winnerId?: string } {
+  const st = room.gameState;
+  if (!st) return { over: false };
+  if (room.dealResult) {
+    const amounts = room.dealResult.amounts;
+    const top = Object.keys(amounts).sort((a, b) => amounts[b] - amounts[a])[0];
+    return { over: true, winnerId: top };
+  }
+  if (!st.handInProgress && st.handNumber > 0) {
+    const withChips = room.players.filter((p) => {
+      const seat = st.seats.find((s) => s.id === p.id);
+      return !seat || seat.stack > 0;
+    });
+    const overByLeave = room.players.length <= 1;
+    const regClosed = !!computeClock(room)?.registrationClosed;
+    const rebuysPossible = !!room.config.allowRebuy && !regClosed;
+    const overByBust = !rebuysPossible && withChips.length <= 1;
+    if (overByLeave || overByBust) return { over: true, winnerId: (withChips[0] ?? room.players[0])?.id };
+  }
+  return { over: false };
+}
+
+/**
+ * Pay tournament prizes to linked member accounts, once. Mutates room.settled
+ * and returns true if it credited anything (so the caller persists).
+ */
+async function settleRoom(room: Room): Promise<boolean> {
+  if (room.settled) return false;
+  const gor = gameOverResult(room);
+  if (!gor.over) return false;
+  room.settled = true; // set before awarding so a retry can't double-pay
+  const standings = computeStandings(room, gor.winnerId);
+  for (const s of standings) {
+    const acct = room.players.find((p) => p.id === s.id)?.account;
+    if (acct && s.prize && s.prize > 0) {
+      await awardPrize(acct, s.prize, s.place === 1).catch(() => {});
+    } else if (acct) {
+      // Still record participation (no prize) for logged-in finishers.
+      await awardPrize(acct, 0, s.place === 1).catch(() => {});
+    }
+  }
+  return true;
 }
 
 /** Remaining players (chips > 0) and the monster prize pool, or null if N/A. */
@@ -386,6 +444,8 @@ export async function tickAndGet(id: string): Promise<Room | undefined> {
   const before = room.history?.length ?? 0;
   recordHandIfEnded(room);
   if ((room.history?.length ?? 0) !== before) changed = true;
+  // Pay tournament prizes to member accounts once the game is over.
+  if (await settleRoom(room)) changed = true;
   if (changed) {
     room.updatedAt = new Date().toISOString();
     // Best-effort: if another instance ticked first, its write wins and the
@@ -442,36 +502,18 @@ export function toView(room: Room, viewerId?: string): RoomView {
         ? new Date(room.actingSince).getTime() + timeout * 1000
         : null;
 
-    // A completed deal ends the tournament immediately.
-    if (room.dealResult) {
+    const gor = gameOverResult(room);
+    if (gor.over) {
       view.gameOver = true;
-      view.standings = computeStandings(room, undefined);
+      // Strip the internal player id from the public standings.
+      view.standings = computeStandings(room, gor.winnerId).map(({ id: _id, ...rest }) => rest);
       view.overallWinner = view.standings[0]?.name;
     } else if (!room.gameState.handInProgress && room.gameState.handNumber > 0) {
-      // Game over (between hands): either everyone left but one, or — in a
-      // no-rebuy tournament — only one player still has chips.
-      const withChips = room.players.filter((p) => {
-        const seat = room.gameState!.seats.find((s) => s.id === p.id);
-        return !seat || seat.stack > 0; // unseated joiners count as in
-      });
-      const overByLeave = room.players.length <= 1;
-      // Rebuys keep a tournament alive; once they're impossible (no-rebuy table
-      // or late-reg closed) a single chip stack means it's over.
-      const regClosed = !!computeClock(room)?.registrationClosed;
-      const rebuysPossible = !!room.config.allowRebuy && !regClosed;
-      const overByBust = !rebuysPossible && withChips.length <= 1;
-      if (overByLeave || overByBust) {
-        view.gameOver = true;
-        const winner = withChips[0] ?? room.players[0];
-        view.overallWinner = winner?.name;
-        view.standings = computeStandings(room, winner?.id);
-      } else {
-        // Offer a final-table deal (monster, 2~6 left) between hands.
-        const preview = computeDealPreview(room);
-        if (preview) {
-          view.canDeal = true;
-          view.dealPreview = preview;
-        }
+      // Offer a final-table deal (monster, 2~6 left) between hands.
+      const preview = computeDealPreview(room);
+      if (preview) {
+        view.canDeal = true;
+        view.dealPreview = preview;
       }
     }
   }
@@ -577,8 +619,12 @@ export async function createRoom(
   name: string,
   hostName: string,
   config: RoomConfig,
+  account?: string,
 ): Promise<{ room: Room; playerId: string }> {
-  const { room, playerId } = newRoom(name, hostName, config);
+  // Monster tables cost a buy-in in game money (logged-in host only).
+  const buyIn = buyInOf(config);
+  if (buyIn > 0 && account) await spend(account, buyIn); // throws if insufficient
+  const { room, playerId } = newRoom(name, hostName, config, account);
   if (usePg) {
     await pgPut(room);
   } else {
@@ -592,12 +638,15 @@ export async function createRoom(
 export async function joinRoom(
   id: string,
   name: string,
+  account?: string,
 ): Promise<{ room: Room; playerId: string } | null> {
   const code = id.toUpperCase();
   const room = await getRoom(code);
   if (!room) return null;
+  const buyIn = buyInOf(room.config);
+  if (buyIn > 0 && account) await spend(account, buyIn); // throws if insufficient
   const expected = room.updatedAt;
-  const playerId = addPlayer(room, name);
+  const playerId = addPlayer(room, name, account);
   if (!playerId) return null;
   await persist(room, expected);
   return { room, playerId };
@@ -637,7 +686,12 @@ export async function rebuyPlayer(id: string, playerId: string): Promise<Room | 
     }
   }
 
-  // Monster-style tables grant a distinct rebuy stack (리바이 300만 ≠ 스타트 250만).
+  // Rebuy costs game money on monster tables (logged-in players).
+  const rebuyFee = buyInOf(room.config);
+  const acct = room.players.find((p) => p.id === playerId)?.account;
+  if (rebuyFee > 0 && acct) await spend(acct, rebuyFee); // throws if insufficient
+
+  // Monster-style tables grant a distinct rebuy stack (리바이 400만 ≠ 스타트 300만).
   const rebuyChips = room.config.rebuyStack ?? room.config.startingStack;
   const expected = room.updatedAt;
   const live = room.gameState.handInProgress;
@@ -679,6 +733,7 @@ export async function makeDeal(
   ctx.ids.forEach((pid, i) => (amounts[pid] = Math.round(split[i])));
   const expected = room.updatedAt;
   room.dealResult = { method, amounts, at: new Date().toISOString() };
+  await settleRoom(room); // pay prizes to member accounts immediately
   room.updatedAt = new Date().toISOString();
   await persist(room, expected);
   return room;
