@@ -394,6 +394,14 @@ export default function MonsterPage() {
             <h3 style={{ margin: 0 }}>📈 실전 셔브 차트</h3>
             <p style={{ margin: '4px 0 0' }}>칩·레벨 → 유효 BB·M → 푸시/폴드 판단</p>
           </Link>
+          <Link
+            href="/play?preset=monster"
+            className="feature"
+            style={{ padding: '10px 14px', flex: '1 1 220px' }}
+          >
+            <h3 style={{ margin: 0 }}>🃏 온라인으로 몬스터 게임</h3>
+            <p style={{ margin: '4px 0 0' }}>친구들과 몬스터 구조로 실시간 토너먼트 (순위·상금 정산)</p>
+          </Link>
         </div>
       </div>
     </div>
