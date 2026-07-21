@@ -33,6 +33,13 @@ import {
   monsterPayouts,
   dealCalc,
   MONSTER_GAME,
+  chenScore,
+  pushFoldAdvice,
+  evaluate7,
+  categoryOf,
+  cardRank,
+  cardSuit,
+  RANKS,
   type TableState,
   type Action,
   type BlindLevel,
@@ -145,14 +152,22 @@ function computeClock(room: Room): TournamentClock | null {
 }
 
 /** Add a player to a room (mutates and returns the new player's id), or null. */
-function addPlayer(room: Room, name: string, account?: string): string | null {
+function addPlayer(room: Room, name: string, account?: string, isBot?: boolean): string | null {
   if (room.players.length >= 9) return null;
   // Block joins mid-hand to keep seating stable; they can join next hand.
-  const id = genId('u');
-  room.players.push({ id, name: name || `P${room.players.length}`, seat: room.players.length, account });
+  const id = genId(isBot ? 'b' : 'u');
+  room.players.push({
+    id,
+    name: name || `P${room.players.length}`,
+    seat: room.players.length,
+    account,
+    ...(isBot ? { isBot: true } : {}),
+  });
   room.updatedAt = new Date().toISOString();
   return id;
 }
+
+const BOT_NAMES = ['🤖 알파', '🤖 브라보', '🤖 찰리', '🤖 델타', '🤖 에코'];
 
 /** The monster buy-in in game money, or 0 for non-monster/free tables. */
 function buyInOf(config: RoomConfig): number {
@@ -247,6 +262,140 @@ function tickTimeouts(room: Room): boolean {
       if (!room.handEndedAt) room.handEndedAt = new Date().toISOString();
     }
     room.updatedAt = new Date().toISOString();
+  }
+  return changed;
+}
+
+// ---------- AI players (server-driven, act on poll ticks) ----------
+
+/** 13x13 grid label ("AKs" / "T9o" / "QQ") from two hole-card ints. */
+function holeLabel(c1: number, c2: number): string {
+  const r1 = cardRank(c1);
+  const r2 = cardRank(c2);
+  const hi = Math.max(r1, r2);
+  const lo = Math.min(r1, r2);
+  if (hi === lo) return RANKS[hi] + RANKS[lo];
+  return RANKS[hi] + RANKS[lo] + (cardSuit(c1) === cardSuit(c2) ? 's' : 'o');
+}
+
+/** Pick `prefer` when legal, else the safest legal fallback. */
+function safeAction(la: ReturnType<typeof legalActions>, prefer: Action): Action {
+  if (la.actions.includes(prefer.type)) return prefer;
+  if (la.actions.includes('check')) return { type: 'check' };
+  if (la.actions.includes('call')) return { type: 'call' };
+  if (la.actions.includes('fold')) return { type: 'fold' };
+  return { type: 'allin' };
+}
+
+/**
+ * Heuristic bot policy — decent-amateur strength, always returns a legal
+ * action. Preflop: Chen score bands + push/fold when short. Postflop: made-
+ * hand category with a small bluff frequency. Randomness keeps it non-robotic.
+ */
+function botAction(st: TableState, seatIdx: number): Action {
+  const seat = st.seats[seatIdx];
+  const la = legalActions(st);
+  const bb = st.bigBlind || 1;
+  const toCall = la.callAmount;
+  const stackBB = seat.stack / bb;
+  const rand = Math.random();
+  const potNow =
+    st.pots.reduce((a, p) => a + p.amount, 0) + st.seats.reduce((a, s) => a + s.committedThisStreet, 0);
+  const raiseTo = (target: number) =>
+    Math.max(la.minRaiseTo, Math.min(la.maxRaiseTo, Math.round(target)));
+
+  if (st.currentStreet === 'preflop') {
+    const label = holeLabel(seat.holeCards[0], seat.holeCards[1]);
+    const score = chenScore(label);
+    // 숏스택: 푸시/폴드 차트를 따른다.
+    if (stackBB <= 12) {
+      const behind = Math.max(1, st.seats.filter((s) => s.status === 'active').length - 1);
+      const adv = pushFoldAdvice(label, Math.max(1, Math.round(stackBB)), behind);
+      if (adv.action === 'push') return safeAction(la, { type: 'allin' });
+      if (adv.action === 'fold' && toCall > 0) return safeAction(la, { type: 'fold' });
+    }
+    if (score >= 11) {
+      // 프리미엄: 레이즈/3벳, 막히면 콜.
+      if (la.actions.includes('raise')) return { type: 'raise', amount: raiseTo(st.currentBet > bb ? st.currentBet * 3 : bb * 2.5) };
+      return safeAction(la, { type: 'call' });
+    }
+    if (score >= 8) {
+      // 플레이 가능: 가끔 오픈, 적당한 가격이면 콜.
+      if (st.currentBet <= bb && la.actions.includes('raise') && rand < 0.5) {
+        return { type: 'raise', amount: raiseTo(bb * 2.5) };
+      }
+      if (toCall <= bb * 3.5) return safeAction(la, { type: 'call' });
+      if (score >= 10 && toCall <= bb * 9) return safeAction(la, { type: 'call' });
+      return safeAction(la, { type: 'fold' });
+    }
+    // 약한 핸드: 공짜면 체크, SB 완성 가끔, 나머지 폴드.
+    if (la.actions.includes('check')) return { type: 'check' };
+    if (toCall <= bb * 0.5 && rand < 0.5) return safeAction(la, { type: 'call' });
+    return safeAction(la, { type: 'fold' });
+  }
+
+  // 포스트플랍: 메이드 핸드 등급 기반.
+  const cat = categoryOf(evaluate7([...seat.holeCards, ...st.board]));
+  const boardPaired = new Set(st.board.map((c) => cardRank(c))).size < st.board.length;
+  const strongPair = cat === 1 && seat.holeCards.some((h) => st.board.every((b) => cardRank(h) >= cardRank(b)));
+  if (cat >= 2 && !(cat === 2 && boardPaired && rand < 0.3)) {
+    // 투페어+: 밸류 벳/레이즈, 콜은 항상.
+    if (la.actions.includes('raise') && rand < 0.7) return { type: 'raise', amount: raiseTo(potNow * 0.7 + toCall) };
+    if (la.actions.includes('bet') && rand < 0.85) return { type: 'bet', amount: raiseTo(potNow * 0.65) };
+    return safeAction(la, { type: 'call' });
+  }
+  if (cat === 1) {
+    // 원페어: 탑페어면 밸류/콜, 아니면 팟 컨트롤.
+    if (strongPair && la.actions.includes('bet') && rand < 0.55) return { type: 'bet', amount: raiseTo(potNow * 0.5) };
+    if (toCall === 0) return safeAction(la, { type: 'check' });
+    const price = toCall / Math.max(1, potNow + toCall);
+    if (price <= (strongPair ? 0.38 : 0.25)) return safeAction(la, { type: 'call' });
+    return safeAction(la, { type: 'fold' });
+  }
+  // 하이카드: 체크, 가끔 블러프, 아주 싼 콜만.
+  if (toCall === 0) {
+    if (la.actions.includes('bet') && rand < 0.12) return { type: 'bet', amount: raiseTo(potNow * 0.5) };
+    return safeAction(la, { type: 'check' });
+  }
+  if (toCall <= potNow * 0.08 && rand < 0.35) return safeAction(la, { type: 'call' });
+  return safeAction(la, { type: 'fold' });
+}
+
+const BOT_DELAY_MS = 900;
+
+/** Let AI seats act (one poll ≈ one bot action for natural pacing). */
+function tickBots(room: Room): boolean {
+  let st = room.gameState;
+  if (!st || !st.handInProgress) return false;
+  const botIds = new Set(room.players.filter((p) => p.isBot).map((p) => p.id));
+  if (!botIds.size) return false;
+  let changed = false;
+  let guard = 0;
+  while (st && st.handInProgress && st.toAct >= 0 && botIds.has(st.seats[st.toAct].id) && guard++ < 40) {
+    const since = room.actingSince ? Date.now() - new Date(room.actingSince).getTime() : Infinity;
+    if (since < BOT_DELAY_MS) break; // 아직 "생각 중" — 다음 폴에서 행동
+    const seatId = st.seats[st.toAct].id;
+    let act: Action;
+    try {
+      act = botAction(st, st.toAct);
+    } catch {
+      const la = legalActions(st);
+      act = la.actions.includes('check') ? { type: 'check' } : { type: 'fold' };
+    }
+    try {
+      st = applyAction(st, seatId, act);
+    } catch {
+      // 정책이 비합법 액션을 낸 극단 케이스: 안전 액션으로 재시도.
+      const la = legalActions(st);
+      st = applyAction(st, seatId, la.actions.includes('check') ? { type: 'check' } : { type: 'fold' });
+    }
+    room.gameState = st;
+    room.actingSince = new Date().toISOString();
+    changed = true;
+  }
+  if (changed && !room.gameState?.handInProgress) {
+    room.actingSince = undefined;
+    if (!room.handEndedAt) room.handEndedAt = new Date().toISOString();
   }
   return changed;
 }
@@ -478,6 +627,7 @@ export async function tickAndGet(id: string): Promise<Room | undefined> {
   if (!room) return undefined;
   const expected = room.updatedAt;
   let changed = tickTimeouts(room);
+  if (tickBots(room)) changed = true;
   // Mark a freshly-ended hand even if no timeout fired.
   const st = room.gameState;
   if (st && !st.handInProgress && !room.handEndedAt) {
@@ -665,11 +815,15 @@ export async function createRoom(
   hostName: string,
   config: RoomConfig,
   account?: string,
+  aiCount = 0,
 ): Promise<{ room: Room; playerId: string }> {
   // Monster tables cost a buy-in in game money (logged-in host only).
   const buyIn = buyInOf(config);
   if (buyIn > 0 && account) await spend(account, buyIn); // throws if insufficient
   const { room, playerId } = newRoom(name, hostName, config, account);
+  // AI 플레이어 (계정 없음 — 바이인/상금 정산 대상 아님).
+  const bots = Math.max(0, Math.min(5, Math.floor(aiCount)));
+  for (let i = 0; i < bots; i++) addPlayer(room, BOT_NAMES[i], undefined, true);
   if (usePg) {
     await pgPut(room);
   } else {
