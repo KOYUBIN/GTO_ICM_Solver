@@ -3,9 +3,26 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 
-type Row = { username: string; nick: string; balance: number; points: number; wins: number; games: number };
+type Row = {
+  username: string;
+  nick: string;
+  balance: number;
+  points: number;
+  wins: number;
+  games: number;
+  xp?: number;
+};
 
 const won = (x: number) => (Math.round(x) || 0).toLocaleString('ko-KR');
+
+// Client-side mirror of levelOf() in @/lib/auth (server-only module).
+function levelOf(xp: number): { level: number; nameKo: string } {
+  const safe = Math.max(0, Math.floor(xp) || 0);
+  const level = Math.floor(Math.sqrt(safe / 100)) + 1;
+  const tier =
+    level >= 20 ? '다이아' : level >= 15 ? '플래티넘' : level >= 10 ? '골드' : level >= 5 ? '실버' : '브론즈';
+  return { level, nameKo: `${tier} Lv.${level}` };
+}
 
 export default function RankingPage() {
   const [rows, setRows] = useState<Row[] | null>(null);
@@ -49,6 +66,7 @@ export default function RankingPage() {
                 <tr style={{ color: 'var(--text-dim)', textAlign: 'right' }}>
                   <th style={{ textAlign: 'left', padding: '6px 8px 6px 0' }}>순위</th>
                   <th style={{ textAlign: 'left', padding: '6px 8px' }}>닉네임</th>
+                  <th style={{ textAlign: 'left', padding: '6px 8px' }}>레벨</th>
                   <th style={{ padding: '6px 8px' }}>누적 상금</th>
                   <th style={{ padding: '6px 8px' }}>게임머니</th>
                   <th style={{ padding: '6px 0 6px 8px' }}>우승/게임</th>
@@ -72,6 +90,9 @@ export default function RankingPage() {
                       <td style={{ textAlign: 'left', padding: '8px', fontWeight: 600 }}>
                         {r.nick}
                         {isMe ? ' (나)' : ''}
+                      </td>
+                      <td style={{ textAlign: 'left', padding: '8px', whiteSpace: 'nowrap' }}>
+                        {levelOf(r.xp ?? 0).nameKo}
                       </td>
                       <td style={{ padding: '8px', fontWeight: 700 }}>{won(r.points)}</td>
                       <td style={{ padding: '8px' }}>{won(r.balance)}</td>

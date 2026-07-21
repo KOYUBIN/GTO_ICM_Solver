@@ -39,6 +39,7 @@ import {
 } from '@gto/engine';
 import { cardsToString } from '@gto/engine';
 import { spend, awardPrize } from './auth';
+import { appendPersonalHands, type PersonalHand } from './handhistory';
 import type { Room, RoomConfig, RoomView, TournamentClock, ChatMsg, HandRecord, PublicRoomSummary } from './rooms';
 
 const usePg = HAS_PG;
@@ -284,6 +285,50 @@ function recordHandIfEnded(room: Room): void {
   });
   if (hist.length > 20) hist.splice(0, hist.length - 20);
   recordBusts(room);
+  queuePersonalHands(room, hist[hist.length - 1]);
+}
+
+/**
+ * Record the finished hand into each logged-in player's personal history
+ * (their own hole cards + chip delta). Fire-and-forget: runs at most once per
+ * hand (recordHandIfEnded is idempotent) and a history hiccup must never
+ * break the game flow.
+ */
+function queuePersonalHands(room: Room, rec: HandRecord): void {
+  const st = room.gameState;
+  if (!st) return;
+  const entries: PersonalHand[] = [];
+  for (const p of room.players) {
+    if (!p.account) continue;
+    const seat = st.seats.find((s) => s.id === p.id);
+    // Only seats actually dealt into the ended hand (busted/sitting-out skip).
+    if (!seat || seat.status === 'empty' || seat.status === 'sittingOut') continue;
+    if (seat.holeCards.length !== 2) continue;
+    const winAmount = st.winners
+      .filter((w) => w.seatId === p.id)
+      .reduce((a, w) => a + w.amount, 0);
+    const delta = winAmount - seat.committedTotal;
+    entries.push({
+      // Deterministic id so a concurrent instance recording the same hand
+      // can't duplicate it (append is idempotent per id).
+      id: `${room.id}-${new Date(room.createdAt).getTime().toString(36)}-${st.handNumber}-${p.account}`,
+      username: p.account,
+      at: rec.endedAt,
+      roomCode: room.id,
+      roomName: room.name,
+      handNumber: rec.handNumber,
+      heroName: seat.name,
+      heroCards: cardsToString(seat.holeCards),
+      board: rec.board,
+      pot: rec.pot,
+      delta,
+      won: delta > 0,
+      winners: rec.winners.map((w) => ({ ...w })),
+      // Copied from the room record, which already respects showdown privacy.
+      revealed: rec.revealed.map((r) => ({ ...r })),
+    });
+  }
+  if (entries.length) void appendPersonalHands(entries).catch(() => {});
 }
 
 /**

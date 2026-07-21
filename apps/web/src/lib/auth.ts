@@ -33,6 +33,8 @@ export type PublicUser = {
   wins: number;
   /** Tournaments finished. */
   games: number;
+  /** Experience points, granted alongside earned game money (레벨 계산용). */
+  xp: number;
 };
 
 /** New accounts start with this much game money. */
@@ -49,6 +51,8 @@ type UserRec = {
   points: number;
   wins: number;
   games: number;
+  /** Experience points (레벨 계산용). */
+  xp: number;
   /** Game money earned from activities today (daily-cap guard). */
   earnedToday: number;
   /** YYYY-MM-DD the earnedToday counter belongs to. */
@@ -65,6 +69,7 @@ function toPublic(u: UserRec): PublicUser {
     points: u.points ?? 0,
     wins: u.wins ?? 0,
     games: u.games ?? 0,
+    xp: u.xp ?? 0,
   };
 }
 
@@ -76,9 +81,24 @@ function normalizeUser(u: UserRec): UserRec {
     points: u.points ?? 0,
     wins: u.wins ?? 0,
     games: u.games ?? 0,
+    xp: u.xp ?? 0,
     earnedToday: u.earnedToday ?? 0,
     earnDay: u.earnDay ?? '',
   };
+}
+
+/**
+ * Level derived from xp: level = floor(sqrt(xp/100)) + 1.
+ * Tiers: 1-4 브론즈, 5-9 실버, 10-14 골드, 15-19 플래티넘, 20+ 다이아.
+ * Pure helper; the client pages keep a local mirror because this module is
+ * server-only.
+ */
+export function levelOf(xp: number): { level: number; nameKo: string } {
+  const safe = Math.max(0, Math.floor(Number(xp) || 0));
+  const level = Math.floor(Math.sqrt(safe / 100)) + 1;
+  const tier =
+    level >= 20 ? '다이아' : level >= 15 ? '플래티넘' : level >= 10 ? '골드' : level >= 5 ? '실버' : '브론즈';
+  return { level, nameKo: `${tier} Lv.${level}` };
 }
 
 function today(): string {
@@ -183,6 +203,7 @@ function pgEnsure(): Promise<void> {
       await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS games integer NOT NULL DEFAULT 0`;
       await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS earned_today bigint NOT NULL DEFAULT 0`;
       await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS earn_day text NOT NULL DEFAULT ''`;
+      await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS xp bigint NOT NULL DEFAULT 0`;
       await pg().sql`CREATE TABLE IF NOT EXISTS sessions (
         token text PRIMARY KEY,
         user_id text NOT NULL,
@@ -205,6 +226,7 @@ function rowToUser(r: Record<string, unknown>): UserRec {
     points: Number(r.points ?? 0),
     wins: Number(r.wins ?? 0),
     games: Number(r.games ?? 0),
+    xp: Number(r.xp ?? 0),
     earnedToday: Number(r.earned_today ?? 0),
     earnDay: String(r.earn_day ?? ''),
   };
@@ -238,9 +260,9 @@ async function getUserById(id: string): Promise<UserRec | undefined> {
 async function insertUser(user: UserRec): Promise<void> {
   if (usePg) {
     await pgEnsure();
-    const res = await pg().sql`INSERT INTO users (id, username, nick, pass_hash, salt, created_at, balance, points, wins, games, earned_today, earn_day)
+    const res = await pg().sql`INSERT INTO users (id, username, nick, pass_hash, salt, created_at, balance, points, wins, games, xp, earned_today, earn_day)
       VALUES (${user.id}, ${user.username}, ${user.nick}, ${user.passHash}, ${user.salt}, ${user.createdAt},
-              ${user.balance}, ${user.points}, ${user.wins}, ${user.games}, ${user.earnedToday}, ${user.earnDay})
+              ${user.balance}, ${user.points}, ${user.wins}, ${user.games}, ${user.xp}, ${user.earnedToday}, ${user.earnDay})
       ON CONFLICT (username) DO NOTHING`;
     if (res.rowCount === 0) throw new Error('이미 사용 중인 아이디입니다.');
     return;
@@ -341,6 +363,7 @@ export async function register(
     points: 0,
     wins: 0,
     games: 0,
+    xp: 0,
     earnedToday: 0,
     earnDay: '',
   };
@@ -420,11 +443,15 @@ export async function earn(
   }
   const room = Math.max(0, DAILY_EARN_CAP - u.earnedToday);
   const grant = Math.max(0, Math.min(Math.floor(amount), room));
+  // XP tracks earned money: at least 1 xp per rewarded activity (none if capped out).
+  const xpGain = grant > 0 ? Math.max(1, Math.round(grant / 100)) : 0;
   u.earnedToday += grant;
   u.balance += grant;
+  u.xp += xpGain;
   if (usePg) {
     await pgEnsure();
-    await pg().sql`UPDATE users SET balance = balance + ${grant}, earned_today = ${u.earnedToday}, earn_day = ${u.earnDay}
+    await pg().sql`UPDATE users SET balance = balance + ${grant}, xp = xp + ${xpGain},
+      earned_today = ${u.earnedToday}, earn_day = ${u.earnDay}
       WHERE id = ${u.id}`;
   } else {
     await saveEconomyFile(u);

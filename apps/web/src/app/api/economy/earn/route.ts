@@ -9,6 +9,8 @@ const REWARDS: Record<string, number> = {
   quiz: 1000, // 퀴즈 정답
   study: 1000, // 학습 완료
   feature: 500, // 기능 사용
+  mission: 5000, // 미션 달성
+  timeattack: 2000, // 타임어택 클리어
 };
 
 // POST /api/economy/earn {reason} -> grants game money (daily-capped). Login only.

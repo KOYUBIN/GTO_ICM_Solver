@@ -17,6 +17,7 @@ const GROUPS: { title: string; links: { href: string; label: string; icon: strin
   {
     title: '솔버 · 전략',
     links: [
+      { href: '/strategy', label: '전략 라이브러리', icon: '📚' },
       { href: '/solver', label: '포스트플랍 솔버', icon: '🧠' },
       { href: '/matchup', label: '매치업 · 에쿼티', icon: '⚔️' },
       { href: '/charts', label: '프리플랍 차트 · 레인지', icon: '📊' },
@@ -29,6 +30,7 @@ const GROUPS: { title: string; links: { href: string; label: string; icon: strin
     links: [
       { href: '/trainer', label: '학습하기', icon: '🎓' },
       { href: '/ranking', label: '랭킹', icon: '🏅' },
+      { href: '/history', label: '핸드 히스토리', icon: '🕘' },
       { href: '/replay', label: '리플레이 · 분석', icon: '🎬' },
       { href: '/notes', label: '핸드 기록장', icon: '📓' },
       { href: '/glossary', label: '용어 사전', icon: '📖' },
