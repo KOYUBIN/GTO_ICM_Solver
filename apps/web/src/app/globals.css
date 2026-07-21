@@ -1425,3 +1425,243 @@ button.rp-quiz-toggle-on:hover {
   padding-top: 14px;
   border-top: 1px solid var(--border);
 }
+
+/* ---- WPL-grade table animations ---- */
+/*
+ * Broadcast-style table animation layer. Fully additive: only new class
+ * selectors and wpl-prefixed keyframes (no existing rule is modified).
+ * Gold accents derive from var(--warn) (#d29922) via color-mix, with
+ * rgba(210, 153, 34, x) fallbacks for browsers without color-mix.
+ * All keyframe animations are gated behind prefers-reduced-motion:
+ * no-preference; static styling stays available to everyone.
+ */
+
+/* -- Static / motion-safe base styles -- */
+
+/* Non-winning cards fade back so the winning hand reads instantly. */
+.card-dim {
+  opacity: 0.35;
+  transition: opacity 0.3s ease;
+}
+
+/* Winner highlight base: subtle static gold rim even without motion. */
+.winner-glow {
+  box-shadow: 0 0 6px 1px rgba(210, 153, 34, 0.35);
+  box-shadow: 0 0 6px 1px color-mix(in srgb, var(--warn) 35%, transparent);
+}
+
+/* Acting seat base: static accent outline so turn state survives
+   reduced-motion; the pulsing ring is added in the motion block below. */
+.seat-acting {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: var(--radius);
+}
+
+/* Small equity pill overlaid on a seat (e.g. "62%"). */
+.equity-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid rgba(210, 153, 34, 0.75);
+  border-color: color-mix(in srgb, var(--warn) 75%, transparent);
+  color: var(--warn);
+  font-size: 12px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  white-space: nowrap;
+  transition:
+    width 0.25s ease,
+    min-width 0.25s ease,
+    padding 0.25s ease,
+    color 0.25s ease,
+    background 0.25s ease;
+}
+
+/* Small pill under the hero's hole cards ("Two Pair", "Flush draw"). */
+.hand-strength {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+/* Contract refinement of the existing .win-float (declared earlier in this
+   file): same absolute gold "+N" float, weight tuned to 800. The motion
+   block below swaps its animation for the 22px rise-and-fade version. */
+.win-float {
+  font-weight: 800;
+}
+
+/* -- Motion (only when the user has not requested reduced motion) -- */
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Card entrance: fade + rise + slight scale. */
+  .deal-in {
+    animation: wplDealIn 0.28s ease-out both;
+  }
+
+  /* Stagger steps for dealing runs of cards (flop, turn, river, pockets). */
+  .deal-in-d1 {
+    animation-delay: 0.06s;
+  }
+  .deal-in-d2 {
+    animation-delay: 0.12s;
+  }
+  .deal-in-d3 {
+    animation-delay: 0.18s;
+  }
+  .deal-in-d4 {
+    animation-delay: 0.24s;
+  }
+  .deal-in-d5 {
+    animation-delay: 0.3s;
+  }
+
+  /* Showdown reveal: quick 3D flip / scale-in. */
+  .flip-reveal {
+    animation: wplFlipReveal 0.4s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+    backface-visibility: hidden;
+  }
+
+  /* Subtle gold pulsing highlight on the winning seat / cards. */
+  .winner-glow {
+    animation: wplWinnerGlow 1s ease-in-out infinite alternate;
+  }
+
+  /* One-shot pot chip pulse when chips are pushed to the pot. */
+  .pot-pulse {
+    animation: wplPotPulse 0.45s ease-out 1;
+  }
+
+  /* One-shot entrance for a bet-amount chip appearing on the felt. */
+  .bet-bump {
+    animation: wplBetBump 0.25s ease-out both;
+  }
+
+  /* Pulsing accent ring layered over the static outline. */
+  .seat-acting {
+    animation: wplSeatActing 1.2s ease-in-out infinite;
+  }
+
+  /* Floating "+N" winnings text: rise 22px and fade out over 1.6s.
+     Later in the cascade than the legacy .win-float rule, so this
+     animation wins for motion-friendly users. */
+  .win-float {
+    animation: wplWinFloat 1.6s ease-out both;
+  }
+}
+
+/* Reduced motion: silence the legacy .win-float animation too, and drop
+   the decorative transitions introduced by this section. */
+@media (prefers-reduced-motion: reduce) {
+  .win-float {
+    animation: none;
+  }
+  .card-dim,
+  .equity-badge {
+    transition: none;
+  }
+}
+
+/* -- Keyframes (wpl-prefixed to avoid clashing with existing ones) -- */
+
+@keyframes wplDealIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes wplFlipReveal {
+  0% {
+    opacity: 0;
+    transform: perspective(600px) rotateY(88deg) scale(0.85);
+  }
+  55% {
+    opacity: 1;
+    transform: perspective(600px) rotateY(-10deg) scale(1.04);
+  }
+  100% {
+    opacity: 1;
+    transform: perspective(600px) rotateY(0deg) scale(1);
+  }
+}
+
+@keyframes wplWinnerGlow {
+  from {
+    box-shadow: 0 0 4px 1px rgba(210, 153, 34, 0.25);
+    box-shadow: 0 0 4px 1px color-mix(in srgb, var(--warn) 25%, transparent);
+  }
+  to {
+    box-shadow: 0 0 14px 3px rgba(210, 153, 34, 0.55);
+    box-shadow: 0 0 14px 3px color-mix(in srgb, var(--warn) 55%, transparent);
+  }
+}
+
+@keyframes wplPotPulse {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.16);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes wplBetBump {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes wplSeatActing {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.45);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(63, 185, 80, 0.06);
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 6%, transparent);
+  }
+}
+
+@keyframes wplWinFloat {
+  0% {
+    opacity: 0;
+    transform: translateX(-50%) translateY(0);
+  }
+  15% {
+    opacity: 1;
+  }
+  65% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-22px);
+  }
+}

@@ -1,10 +1,14 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   cardToString,
+  cardsToString,
   evaluate7,
   categoryOf,
+  describeHand,
+  bestFive,
+  calcEquity,
   type TableState,
   type Action,
   type Seat,
@@ -36,14 +40,13 @@ const STREET_KO: Record<string, string> = {
   showdown: '쇼다운',
 };
 
-/** Render an engine Card (-1 = face down). */
-function Card({ card, w = 34, deal }: { card: number; w?: number; deal?: boolean }) {
+/** Render an engine Card (-1 = face down). `cls` appends animation classes. */
+function Card({ card, w = 34, cls = '' }: { card: number; w?: number; cls?: string }) {
   const h = Math.round(w * 1.4);
-  const cls = deal ? ' card-deal' : '';
   if (card < 0) {
     return (
       <span
-        className={`playing-card card-back${cls}`}
+        className={['playing-card', 'card-back', cls].filter(Boolean).join(' ')}
         style={{ width: w, height: h, fontSize: Math.round(w * 0.5) }}
       >
         ◆
@@ -53,7 +56,7 @@ function Card({ card, w = 34, deal }: { card: number; w?: number; deal?: boolean
   const str = cardToString(card);
   return (
     <span
-      className={`playing-card suit-${str[1]}${cls}`}
+      className={['playing-card', `suit-${str[1]}`, cls].filter(Boolean).join(' ')}
       style={{ width: w, height: h, fontSize: Math.round(w * 0.48) }}
     >
       {str[0]}
@@ -111,6 +114,143 @@ function useTableSounds(room: RoomView, youId: string | null, enabled: boolean) 
   }, [room, youId, enabled]);
 }
 
+// ---------- all-in runout theater ----------
+
+/**
+ * Local staged reveal of a synchronously-finished all-in hand. While active,
+ * the felt renders `revealLen` board cards, the pre-runout `stacks`, and no
+ * winner presentation; `contenders` are the seats with revealed hole cards.
+ */
+interface TheaterView {
+  hand: number;
+  revealLen: number;
+  stacks: Record<string, number>;
+  contenders: string[];
+}
+
+const THEATER_STEP_MS = 800;
+
+/**
+ * Detect the "all-in runout" poll transition (same hand, was in progress,
+ * now finished with a board that jumped to 5 cards and 2+ revealed hands)
+ * and stage the board reveal street by street. Also computes live equities
+ * for the staged board. Worst case (preflop all-in) the theater lasts
+ * 4 * 800ms = 3.2s, safely under the 6s server auto-advance.
+ */
+function useRunoutTheater(state: TableState | null | undefined): {
+  theater: TheaterView | null;
+  equities: Record<string, number> | null;
+} {
+  const [theater, setTheater] = useState<TheaterView | null>(null);
+  const [equities, setEquities] = useState<Record<string, number> | null>(null);
+  const prevRef = useRef<{ hand: number; inProgress: boolean; boardLen: number } | null>(null);
+  const stacksRef = useRef<Record<string, number>>({});
+  const timersRef = useRef<number[]>([]);
+  const activeHandRef = useRef<number | null>(null);
+
+  // Layout effect so the staged board is committed before the final state
+  // ever paints (no one-frame flash of the full board).
+  useLayoutEffect(() => {
+    if (!state) return;
+    const prev = prevRef.current;
+    prevRef.current = { hand: state.handNumber, inProgress: state.handInProgress, boardLen: state.board.length };
+
+    // Remember stacks as of the last in-progress poll for staged display.
+    if (state.handInProgress) {
+      const m: Record<string, number> = {};
+      for (const s of state.seats) m[s.id] = s.stack;
+      stacksRef.current = m;
+    }
+
+    // A new hand arriving mid-theater cancels the theater immediately.
+    if (activeHandRef.current != null && (state.handNumber !== activeHandRef.current || state.handInProgress)) {
+      for (const t of timersRef.current) clearTimeout(t);
+      timersRef.current = [];
+      activeHandRef.current = null;
+      setTheater(null);
+    }
+
+    const grewToRiver =
+      prev != null &&
+      prev.hand === state.handNumber &&
+      prev.inProgress &&
+      !state.handInProgress &&
+      state.board.length === 5 &&
+      state.board.length > prev.boardLen;
+    if (!grewToRiver) return;
+    if (state.currentStreet !== 'showdown' || state.winners.length === 0) return;
+    if (state.winners.some((w) => w.hand === 'uncontested')) return;
+    const contenders = state.seats.filter(
+      (s) =>
+        (s.status === 'active' || s.status === 'allin') &&
+        s.holeCards.length === 2 &&
+        s.holeCards.every((c) => c >= 0),
+    );
+    if (contenders.length < 2) return; // reveal data missing — skip the theater
+
+    const hand = state.handNumber;
+    const startLen = prev.boardLen;
+    const lens = startLen < 3 ? [3, 4, 5] : startLen === 3 ? [4, 5] : [5];
+    for (const t of timersRef.current) clearTimeout(t);
+    timersRef.current = [];
+    activeHandRef.current = hand;
+    setTheater({
+      hand,
+      revealLen: startLen,
+      stacks: { ...stacksRef.current },
+      contenders: contenders.map((s) => s.id),
+    });
+    lens.forEach((len, i) => {
+      timersRef.current.push(
+        window.setTimeout(() => {
+          setTheater((t) => (t && t.hand === hand ? { ...t, revealLen: len } : t));
+        }, THEATER_STEP_MS * (i + 1)),
+      );
+    });
+    timersRef.current.push(
+      window.setTimeout(() => {
+        activeHandRef.current = null;
+        setTheater((t) => (t && t.hand === hand ? null : t));
+      }, THEATER_STEP_MS * (lens.length + 1)),
+    );
+  }, [state]);
+
+  // Clear all pending timeouts on unmount.
+  useEffect(
+    () => () => {
+      for (const t of timersRef.current) clearTimeout(t);
+    },
+    [],
+  );
+
+  // Live equities for the staged board (badges are optional: skip on error).
+  useEffect(() => {
+    if (!theater || !state || state.handNumber !== theater.hand) {
+      setEquities(null);
+      return;
+    }
+    try {
+      const players = theater.contenders.map((id) => {
+        const s = state.seats.find((x) => x.id === id);
+        if (!s) throw new Error('seat missing');
+        return { cards: cardsToString(s.holeCards) };
+      });
+      const board = cardsToString(state.board.slice(0, theater.revealLen));
+      const res = calcEquity(players, { board: board || undefined, iterations: 400, seed: 7 });
+      const m: Record<string, number> = {};
+      theater.contenders.forEach((id, i) => {
+        m[id] = res.equities[i];
+      });
+      setEquities(m);
+    } catch {
+      setEquities(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [theater?.hand, theater?.revealLen]);
+
+  return { theater, equities };
+}
+
 export function Table({
   room,
   youId,
@@ -150,6 +290,7 @@ export function Table({
     });
   }
   useTableSounds(room, youId, soundOn);
+  const { theater, equities } = useRunoutTheater(state);
 
   return (
     <div>
@@ -188,8 +329,8 @@ export function Table({
         <Lobby room={room} isHost={isHost} spectating={spectating} onDeal={onDeal} />
       ) : (
         <>
-          <Felt room={room} state={state} youId={youId} />
-          <HandResult state={state} youId={youId} />
+          <Felt room={room} state={state} youId={youId} theater={theater} equities={equities} />
+          {!theater && <HandResult state={state} youId={youId} />}
           {canRebuy && (
             <div
               className="card"
@@ -478,7 +619,19 @@ function HandHistory({ room }: { room: RoomView }) {
 
 // ---------- the table itself ----------
 
-function Felt({ room, state, youId }: { room: RoomView; state: TableState; youId: string | null }) {
+function Felt({
+  room,
+  state,
+  youId,
+  theater,
+  equities,
+}: {
+  room: RoomView;
+  state: TableState;
+  youId: string | null;
+  theater: TheaterView | null;
+  equities: Record<string, number> | null;
+}) {
   const now = useServerNow(room.serverNow);
   const seats = state.seats.filter((s) => s.status !== 'empty');
   const n = seats.length;
@@ -498,21 +651,112 @@ function Felt({ room, state, youId }: { room: RoomView; state: TableState; youId
       ? Math.max(0, Math.min(1, (room.deadline - now) / (timeout * 1000)))
       : null;
 
+  // During the all-in runout theater: staged board/street, pre-runout stacks,
+  // and every winner presentation held back until the theater completes.
+  const shownBoard = theater ? state.board.slice(0, theater.revealLen) : state.board;
+  const stagedStreet =
+    shownBoard.length === 0 ? 'preflop' : shownBoard.length === 3 ? 'flop' : shownBoard.length === 4 ? 'turn' : 'river';
+  const streetLabel = theater ? STREET_KO[stagedStreet] : STREET_KO[state.currentStreet];
+
+  // One-shot pot pulse only when the pot grows (idempotent across re-renders).
+  const potRef = useRef({ pot: -1, pulse: false });
+  if (potTotal !== potRef.current.pot) {
+    potRef.current = { pulse: potRef.current.pot >= 0 && potTotal > potRef.current.pot, pot: potTotal };
+  }
+  const potPulse = potRef.current.pulse;
+
+  // Track how many board cards were already shown so only the newly dealt
+  // street gets the deal-in stagger (ref update in an effect: no poll loops).
+  const boardBaseRef = useRef({ hand: -1, len: 0 });
+  const bb = boardBaseRef.current;
+  const boardBase = bb.hand === state.handNumber ? Math.min(bb.len, shownBoard.length) : 0;
+  useEffect(() => {
+    boardBaseRef.current = { hand: state.handNumber, len: shownBoard.length };
+  }, [state.handNumber, shownBoard.length]);
+
+  // Freeze each board card's entrance class at first appearance: the 250ms
+  // clock tick re-renders would otherwise strip the class next frame and
+  // cancel the CSS animation mid-flight (stagger delays outlast one tick).
+  const entranceRef = useRef<{ hand: number; cls: Record<string, string> }>({ hand: -1, cls: {} });
+  if (entranceRef.current.hand !== state.handNumber) {
+    entranceRef.current = { hand: state.handNumber, cls: {} };
+  }
+  const entranceFor = (key: string, i: number): string => {
+    let e = entranceRef.current.cls[key];
+    if (e === undefined) {
+      e = i >= boardBase ? `deal-in deal-in-d${Math.min(i - boardBase + 1, 5)}` : '';
+      entranceRef.current.cls[key] = e;
+    }
+    return e;
+  };
+
+  // Winner celebration: contested showdown, after any theater finished.
+  const contested =
+    state.currentStreet === 'showdown' &&
+    state.winners.length > 0 &&
+    !state.winners.some((w) => w.hand === 'uncontested');
+  const celebrate = contested && !theater;
+  let topWinnerId: string | null = null;
+  let winningFive: Set<number> | null = null;
+  if (celebrate) {
+    const totals = new Map<string, number>();
+    for (const w of state.winners) totals.set(w.seatId, (totals.get(w.seatId) ?? 0) + w.amount);
+    for (const [id, amt] of totals) {
+      if (topWinnerId === null || amt > (totals.get(topWinnerId) ?? -1)) topWinnerId = id;
+    }
+    const ws = topWinnerId ? state.seats.find((s) => s.id === topWinnerId) : undefined;
+    if (ws && ws.holeCards.length === 2 && ws.holeCards.every((c) => c >= 0) && state.board.length >= 3) {
+      try {
+        winningFive = new Set(bestFive(ws.holeCards, state.board));
+      } catch {
+        winningFive = null;
+      }
+    }
+  }
+  /** '' | 'winner-glow' | 'card-dim' for a face-up card during celebration. */
+  const glowOrDim = (c: number): string =>
+    celebrate && winningFive && c >= 0 ? (winningFive.has(c) ? 'winner-glow' : 'card-dim') : '';
+
+  // Hero hand-strength badge, tracking the staged board during the theater.
+  const heroSeat = youId ? seats.find((s) => s.id === youId) : undefined;
+  let heroStrength: string | null = null;
+  if (
+    heroSeat &&
+    heroSeat.status !== 'folded' &&
+    heroSeat.holeCards.length === 2 &&
+    heroSeat.holeCards.every((c) => c >= 0)
+  ) {
+    try {
+      heroStrength = describeHand(heroSeat.holeCards, shownBoard).detailKo;
+    } catch {
+      heroStrength = null;
+    }
+  }
+
   return (
     <div className="poker-rail">
       <div className="poker-felt">
         {/* Center: street, board, pot */}
         <div className="board-center">
           <div className="pot-label">
-            {STREET_KO[state.currentStreet]} · 팟{' '}
-            <span key={potTotal} className="pot-bump" style={{ fontWeight: 800 }}>
+            {streetLabel} · 팟{' '}
+            <span
+              key={potTotal}
+              className={`pot-bump${potPulse ? ' pot-pulse' : ''}`}
+              style={{ fontWeight: 800 }}
+            >
               {potTotal.toLocaleString()}
             </span>
           </div>
           <div style={{ display: 'flex', gap: 6, justifyContent: 'center', minHeight: 52 }}>
-            {state.board.map((c, i) => (
-              <Card key={`${i}-${c}`} card={c} w={38} deal />
-            ))}
+            {shownBoard.map((c, i) => {
+              const dg = glowOrDim(c);
+              const key = `${state.handNumber}-${i}-${c}`;
+              const entrance = entranceFor(key, i);
+              // card-dim must not fight the deal-in fill-mode opacity.
+              const cls = dg === 'card-dim' ? dg : [entrance, dg].filter(Boolean).join(' ');
+              return <Card key={key} card={c} w={38} cls={cls} />;
+            })}
           </div>
           {state.pots.length > 1 && (
             <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
@@ -525,24 +769,39 @@ function Felt({ room, state, youId }: { room: RoomView; state: TableState; youId
           const p = pos[i] ?? { x: 50, y: 50 };
           const isYou = !!youId && seat.id === youId;
           const isTurn = seat.id === toActId && state.handInProgress;
-          const isWinner = winnerIds.has(seat.id);
+          const isWinner = winnerIds.has(seat.id) && !theater;
           const folded = seat.status === 'folded';
           const won = state.winners.filter((w) => w.seatId === seat.id).reduce((a, w) => a + w.amount, 0);
+          const shownStack = theater ? theater.stacks[seat.id] ?? seat.stack : seat.stack;
+          const eq = theater && equities ? equities[seat.id] : undefined;
           // Bet chips sit between the seat and the table center.
           const bx = p.x + (50 - p.x) * 0.42;
           const by = p.y + (50 - p.y) * 0.42;
           return (
             <div key={seat.id}>
               {seat.committedThisStreet > 0 && (
-                <div className="bet-chip" style={{ left: `${bx}%`, top: `${by}%` }}>
-                  <span className="chip-disc" />
-                  {seat.committedThisStreet.toLocaleString()}
+                <div
+                  key={`bet-${seat.committedThisStreet}`}
+                  className="bet-chip"
+                  style={{ left: `${bx}%`, top: `${by}%` }}
+                >
+                  <span className="bet-bump" style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                    <span className="chip-disc" />
+                    {seat.committedThisStreet.toLocaleString()}
+                  </span>
                 </div>
               )}
               <div
-                className={`pseat${isTurn ? ' pseat-turn' : ''}${isWinner ? ' pseat-winner' : ''}${folded ? ' pseat-folded' : ''}`}
+                className={`pseat${isTurn ? ' pseat-turn seat-acting' : ''}${isWinner ? ' pseat-winner' : ''}${folded ? ' pseat-folded' : ''}`}
                 style={{ left: `${p.x}%`, top: `${p.y}%` }}
               >
+                {eq != null && (
+                  <div
+                    style={{ position: 'absolute', top: -14, left: '50%', transform: 'translateX(-50%)', zIndex: 6 }}
+                  >
+                    <span className="equity-badge">{Math.round(eq * 100)}%</span>
+                  </div>
+                )}
                 {seat.lastAction && state.handInProgress && (
                   <div className={`action-bubble${/폴드/.test(seat.lastAction) ? ' bubble-fold' : /레이즈|벳|올인/.test(seat.lastAction) ? ' bubble-raise' : ''}`}>
                     {seat.lastAction}
@@ -573,17 +832,34 @@ function Felt({ room, state, youId }: { room: RoomView; state: TableState; youId
                   <div className="pseat-cards">
                     {seat.holeCards.length > 0 &&
                       !folded &&
-                      seat.holeCards.map((c, ci) => <Card key={`${ci}-${c}`} card={c} w={isYou ? 34 : 26} deal />)}
+                      seat.holeCards.map((c, ci) => {
+                        const dg = glowOrDim(c);
+                        const revealed = c >= 0 && !isYou && contested;
+                        const cls =
+                          dg === 'card-dim'
+                            ? dg
+                            : revealed
+                              ? ['flip-reveal', dg].filter(Boolean).join(' ')
+                              : [`deal-in deal-in-d${ci + 1}`, dg].filter(Boolean).join(' ');
+                        return (
+                          <Card key={`${state.handNumber}-${ci}-${c}`} card={c} w={isYou ? 34 : 26} cls={cls} />
+                        );
+                      })}
                   </div>
                 </div>
-                <div className="pseat-plate">
+                <div className={`pseat-plate${celebrate && seat.id === topWinnerId ? ' winner-glow' : ''}`}>
                   <div className="pseat-name">
                     {seat.name}
                     {isYou ? ' (나)' : ''}
                     {seat.status === 'allin' && <span className="pill-allin">올인</span>}
                   </div>
-                  <div className="pseat-stack">{seat.stack.toLocaleString()}</div>
+                  <div className="pseat-stack">{shownStack.toLocaleString()}</div>
                 </div>
+                {isYou && heroStrength && (
+                  <div style={{ marginTop: 2 }}>
+                    <span className="hand-strength">{heroStrength}</span>
+                  </div>
+                )}
                 {isWinner && won > 0 && <div className="win-float">+{won.toLocaleString()}</div>}
               </div>
             </div>
