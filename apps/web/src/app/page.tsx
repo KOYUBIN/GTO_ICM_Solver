@@ -26,6 +26,11 @@ const GROUPS: { title: string; items: Feature[] }[] = [
     title: '솔버 · 전략',
     items: [
       {
+        href: '/strategy',
+        title: '📚 전략 라이브러리',
+        desc: '주제별 포커 전략 가이드(포지션·3벳·ICM·멘탈) + 영상·외부 학습 자료를 한곳에 정리했습니다.',
+      },
+      {
         href: '/solver',
         title: '포스트플랍 솔버 (MCCFR)',
         desc: '몬테카를로 CFR로 플랍·턴·리버를 풀어 체크/베팅 전략과 EV를 계산합니다.',
@@ -58,7 +63,12 @@ const GROUPS: { title: string; items: Feature[] }[] = [
       {
         href: '/trainer',
         title: '🎓 학습하기 (GTO 트레이너)',
-        desc: 'GTO Wizard 트레이너식 랜덤 스팟 드릴 — 정답률·연속 정답·오답 노트로 복습합니다.',
+        desc: 'GTO Wizard 트레이너식 랜덤 스팟 드릴 — 미션·타임어택·약점 분석과 오답 노트로 복습까지.',
+      },
+      {
+        href: '/history',
+        title: '🕘 핸드 히스토리',
+        desc: '내가 친 핸드가 자동 저장 — 카드·보드·수익까지 다시 보기.',
       },
       {
         href: '/replay',

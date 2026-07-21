@@ -10,9 +10,19 @@ type User = {
   points?: number;
   wins?: number;
   games?: number;
+  xp?: number;
 };
 
 const won = (x: number) => (Math.round(x) || 0).toLocaleString('ko-KR');
+
+// Client-side mirror of levelOf() in @/lib/auth (server-only module).
+function levelOf(xp: number): { level: number; nameKo: string } {
+  const safe = Math.max(0, Math.floor(xp) || 0);
+  const level = Math.floor(Math.sqrt(safe / 100)) + 1;
+  const tier =
+    level >= 20 ? '다이아' : level >= 15 ? '플래티넘' : level >= 10 ? '골드' : level >= 5 ? '실버' : '브론즈';
+  return { level, nameKo: `${tier} Lv.${level}` };
+}
 
 export default function ProfilePage() {
   // undefined = loading, null = not logged in
@@ -85,6 +95,14 @@ export default function ProfilePage() {
         <div className="stat">
           <span>💰 게임머니</span>
           <span className="val" style={{ color: 'var(--warn)' }}>{won(user.balance ?? 0)} GM</span>
+        </div>
+        <div className="stat">
+          <span>레벨</span>
+          <span className="val" style={{ color: 'var(--accent)' }}>{levelOf(user.xp ?? 0).nameKo}</span>
+        </div>
+        <div className="stat">
+          <span>XP</span>
+          <span className="val">{won(user.xp ?? 0)} XP</span>
         </div>
         <div className="stat">
           <span>누적 상금(랭킹 점수)</span>

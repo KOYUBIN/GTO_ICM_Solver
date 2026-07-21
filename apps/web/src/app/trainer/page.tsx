@@ -84,6 +84,20 @@ const MODE_SHORT: Record<Mode, string> = {
   icm: 'ICM',
 };
 
+/** UI mode = stats modes + 타임 어택 (TA는 전적에 집계되지 않으므로 Mode와 분리). */
+type UiMode = Mode | 'timeattack';
+const UI_MODES: UiMode[] = [...MODES, 'timeattack'];
+const UI_MODE_KO: Record<UiMode, string> = { ...MODE_KO, timeattack: '⚡ 타임 어택' };
+
+/* ---- 일일 미션 / 타임 어택 (localStorage) ---- */
+
+const MISSIONS_KEY = 'gto-trainer-missions';
+const TA_BEST_KEY = 'gto-trainer-timeattack-best';
+const TA_CLAIM_KEY = 'gto-trainer-timeattack-claim';
+const TA_SECONDS = 60;
+const TA_REWARD_SCORE = 10;
+const MISSION_TARGETS = { m1: 15, m2: 10, m3: 5 } as const;
+
 /** Korean labels for the chip-EV quiz `line` field (differs from ActionLine). */
 const CHIP_LINE_KO: Record<string, string> = {
   RFI: 'RFI 오픈',
@@ -152,6 +166,8 @@ interface TrainerStats {
   byLine: Record<ActionLine, LineStat>;
   /** Per-mode tally (all three trainer modes contribute). */
   byMode: Record<Mode, LineStat>;
+  /** 약점 분석: per-hero-position tally for the live preflop drill. */
+  byPos: Record<string, LineStat>;
   /** Last 20 wrong answers, newest first. */
   wrong: WrongNote[];
 }
@@ -174,6 +190,7 @@ function emptyStats(): TrainerStats {
       chipev: { total: 0, correct: 0 },
       icm: { total: 0, correct: 0 },
     },
+    byPos: {},
     wrong: [],
   };
 }
@@ -198,6 +215,8 @@ function loadStats(): TrainerStats {
       ...p,
       byLine: { ...base.byLine, ...(p.byLine ?? {}) },
       byMode: { ...base.byMode, ...(p.byMode ?? {}) },
+      // Back-compat: older saves have no byPos -> start empty.
+      byPos: { ...(p.byPos ?? {}) },
       wrong,
     };
   } catch {
@@ -210,6 +229,60 @@ function saveStats(s: TrainerStats) {
     window.localStorage.setItem(STATS_KEY, JSON.stringify(s));
   } catch {
     // localStorage unavailable (private mode) — session-only stats.
+  }
+}
+
+/* ---- 일일 미션 상태 (YYYY-MM-DD로 키, 날짜가 바뀌면 리셋) ---- */
+
+function todayStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+interface MissionDay {
+  date: string;
+  /** 오늘 푼 문제 수 (m1). */
+  solved: number;
+  /** 오늘 맞힌 정답 수 (m2). */
+  correct: number;
+  /** 오늘의 현재 연속 정답 (m3 진행용 — 타임 어택 답안은 건드리지 않음). */
+  streak: number;
+  /** 오늘의 최고 연속 정답 (m3). */
+  bestStreak: number;
+  /** 미션별 보상 지급 여부 (하루 1회). */
+  claimed: { m1: boolean; m2: boolean; m3: boolean };
+}
+
+function freshMissions(): MissionDay {
+  return {
+    date: todayStr(),
+    solved: 0,
+    correct: 0,
+    streak: 0,
+    bestStreak: 0,
+    claimed: { m1: false, m2: false, m3: false },
+  };
+}
+
+function loadMissions(): MissionDay {
+  if (typeof window === 'undefined') return freshMissions();
+  try {
+    const raw = window.localStorage.getItem(MISSIONS_KEY);
+    if (!raw) return freshMissions();
+    const p = JSON.parse(raw) as Partial<MissionDay>;
+    if (p.date !== todayStr()) return freshMissions();
+    const base = freshMissions();
+    return { ...base, ...p, claimed: { ...base.claimed, ...(p.claimed ?? {}) } };
+  } catch {
+    return freshMissions();
+  }
+}
+
+function saveMissions(m: MissionDay) {
+  try {
+    window.localStorage.setItem(MISSIONS_KEY, JSON.stringify(m));
+  } catch {
+    // localStorage unavailable — session-only mission progress.
   }
 }
 
@@ -468,6 +541,58 @@ function preflopActionEvs(spot: Spot): EvRow[] {
     { key: 'call', ev: callEv },
     { key: 'fold', ev: 0 },
   ];
+}
+
+/* ---- 규칙 기반 오답 해설 (모든 수치는 mix/evRows에서 파생) ---- */
+
+/** 받침 유무에 따른 조사 선택 (콜→이/은, 폴드→가/는). */
+function josa(word: string, withJong: string, noJong: string): string {
+  const code = word.charCodeAt(word.length - 1);
+  if (code >= 0xac00 && code <= 0xd7a3) return (code - 0xac00) % 28 !== 0 ? withJong : noJong;
+  return `${withJong}(${noJong})`;
+}
+
+/**
+ * 피드백 패널용 한 문단 해설: 최적 액션·빈도, 선택이 근소한 차선책이었는지
+ * (최빈 빈도의 50% 이상), evRows가 있으면 선택 EV vs 최고 EV 비교(bb).
+ */
+function buildExplanation(spot: Spot, picked: PreflopAction, evRows: EvRow[] | null): string {
+  const line = spot.line;
+  const best = bestActionOf(spot.mix);
+  const bestFreq = spot.mix[best];
+  const bestName = actionName(line, best);
+  const pickedName = actionName(line, picked);
+  const pickedFreq = spot.mix[picked];
+  const parts: string[] = [];
+  parts.push(`이 스팟의 최적 액션은 ${bestName} ${Math.round(bestFreq * 100)}%입니다.`);
+  if (picked === best) {
+    parts.push('최고 빈도 액션을 정확히 골랐습니다.');
+  } else if (pickedFreq >= bestFreq * 0.5) {
+    parts.push(
+      `선택한 ${pickedName}(${Math.round(pickedFreq * 100)}%)도 근소한 차이의 혼합 전략 옵션입니다.`,
+    );
+  } else {
+    parts.push(
+      `선택한 ${pickedName}${josa(pickedName, '은', '는')} 빈도 ${Math.round(pickedFreq * 100)}%로 최적 대비 ${Math.round((bestFreq - pickedFreq) * 100)}%p 낮습니다.`,
+    );
+  }
+  if (evRows) {
+    const pickedRow = evRows.find((r) => r.key === picked);
+    const top = evRows.reduce((m, r) => (r.ev > m.ev ? r : m), evRows[0]);
+    if (pickedRow) {
+      if (top.key === picked) {
+        parts.push(
+          `EV 근사로도 ${pickedName}(${fmtBB(pickedRow.ev)})${josa(pickedName, '이', '가')} 가장 유리했습니다.`,
+        );
+      } else {
+        const topName = actionName(line, top.key);
+        parts.push(
+          `EV 근사로는 ${topName}(${fmtBB(top.ev)})${josa(topName, '이', '가')} ${pickedName}(${fmtBB(pickedRow.ev)})보다 약 ${(top.ev - pickedRow.ev).toFixed(2)}bb 유리했습니다.`,
+        );
+      }
+    }
+  }
+  return parts.join(' ');
 }
 
 /* ---- new-mode helpers ---- */
@@ -1070,7 +1195,7 @@ function IcmDrill({ onGraded }: { onGraded: Graded }) {
 /* -------------------------------- page ---------------------------------- */
 
 export default function TrainerPage() {
-  const [mode, setMode] = useState<Mode>('preflop');
+  const [mode, setMode] = useState<UiMode>('preflop');
   const [spot, setSpot] = useState<Spot | null>(null);
   const [picked, setPicked] = useState<PreflopAction | null>(null);
   const [stats, setStats] = useState<TrainerStats>(emptyStats);
@@ -1085,14 +1210,40 @@ export default function TrainerPage() {
   const [session, setSession] = useState({ total: 0, correct: 0, earned: 0 });
   const [stopped, setStopped] = useState(false);
 
+  // 🎯 일일 미션 (오늘 날짜 기준, localStorage). ref는 이벤트 핸들러에서의
+  // 최신값 접근용 (stale closure 방지) — setState 업데이터에 부수효과를 넣지 않는다.
+  const [missions, setMissions] = useState<MissionDay>(freshMissions);
+  const missionsRef = useRef<MissionDay>(freshMissions());
+  const [missionsOpen, setMissionsOpen] = useState(true);
+
+  // 🔍 약점 분석 패널 접힘 상태.
+  const [weakOpen, setWeakOpen] = useState(false);
+
+  // ⚡ 타임 어택.
+  const [taPhase, setTaPhase] = useState<'idle' | 'running' | 'over'>('idle');
+  const [taTimeLeft, setTaTimeLeft] = useState(TA_SECONDS);
+  const [taScore, setTaScore] = useState(0);
+  const [taTotal, setTaTotal] = useState(0);
+  const [taSpot, setTaSpot] = useState<Spot | null>(null);
+  const [taFlash, setTaFlash] = useState<'ok' | 'no' | null>(null);
+  const [taBest, setTaBest] = useState(0);
+  const [taClaimedToday, setTaClaimedToday] = useState(false);
+  const [taRunEarned, setTaRunEarned] = useState(false);
+  const taIntervalRef = useRef<number | null>(null);
+  const taFlashTimerRef = useRef<number | null>(null);
+  const taEndRef = useRef(0);
+  const taScoreRef = useRef(0);
+  const taTotalRef = useRef(0);
+  const taBestRef = useRef(0);
+
   // 정답을 맞히면 게임머니 지급 (로그인 시, 서버 일일 상한 적용).
   const [earnFlash, setEarnFlash] = useState<number | null>(null);
   const earnTimerRef = useRef<number | null>(null);
-  function earnReward() {
+  function earnReward(reason: 'quiz' | 'mission' | 'timeattack' = 'quiz') {
     fetch('/api/economy/earn', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ reason: 'quiz' }),
+      body: JSON.stringify({ reason }),
     })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
@@ -1106,13 +1257,35 @@ export default function TrainerPage() {
       .catch(() => {});
   }
 
-  // Client-only bootstrap: load persisted stats and deal the first spot.
+  // Client-only bootstrap: load persisted stats/missions/TA records and deal
+  // the first spot. Cleanup clears every timer this page can start.
   useEffect(() => {
     setStats(loadStats());
     setSpot(randomSpot());
+    const m = loadMissions();
+    missionsRef.current = m;
+    setMissions(m);
+    try {
+      const best = Number(window.localStorage.getItem(TA_BEST_KEY) ?? '0') || 0;
+      taBestRef.current = best;
+      setTaBest(best);
+    } catch {
+      /* ignore */
+    }
+    try {
+      const raw = window.localStorage.getItem(TA_CLAIM_KEY);
+      const c = raw ? (JSON.parse(raw) as { date?: string; claimed?: boolean }) : null;
+      if (c && c.date === todayStr() && c.claimed) setTaClaimedToday(true);
+    } catch {
+      /* ignore */
+    }
     return () => {
       if (timerRef.current) window.clearTimeout(timerRef.current);
+      if (earnTimerRef.current) window.clearTimeout(earnTimerRef.current);
+      if (taIntervalRef.current) window.clearInterval(taIntervalRef.current);
+      if (taFlashTimerRef.current) window.clearTimeout(taFlashTimerRef.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function clearTimer() {
@@ -1147,6 +1320,163 @@ export default function TrainerPage() {
     setSpot(randomSpot(next));
   }
 
+  /** 타임 어택 시작 화면용: 필터만 바꾸고 스팟/큐는 건드리지 않는다. */
+  function changeFilterOnly(patch: Partial<SpotFilter>) {
+    setSpotFilter((cur) => {
+      const next = { ...cur, ...patch };
+      if (next.heroPos && !heroesFor(next.line).includes(next.heroPos as Position)) {
+        next.heroPos = '';
+      }
+      return next;
+    });
+  }
+
+  /**
+   * 🎯 일일 미션 진행 (모든 모드의 채점기에서 호출 — 이벤트 핸들러 안에서만).
+   * 타임 어택 답안은 m1/m2에만 집계 (affectStreak=false → m3 연속 기록 불변).
+   * 새로 달성된 미션은 즉시 claimed 처리 후 서버에 보상 요청 (401/상한 에러는
+   * earnReward 내부에서 조용히 무시됨).
+   */
+  function bumpMissions(correct: boolean, affectStreak = true) {
+    const cur = missionsRef.current.date === todayStr() ? missionsRef.current : freshMissions();
+    const streak = affectStreak ? (correct ? cur.streak + 1 : 0) : cur.streak;
+    const next: MissionDay = {
+      ...cur,
+      solved: cur.solved + 1,
+      correct: cur.correct + (correct ? 1 : 0),
+      streak,
+      bestStreak: Math.max(cur.bestStreak, streak),
+      claimed: { ...cur.claimed },
+    };
+    let claims = 0;
+    if (next.solved >= MISSION_TARGETS.m1 && !next.claimed.m1) {
+      next.claimed.m1 = true;
+      claims += 1;
+    }
+    if (next.correct >= MISSION_TARGETS.m2 && !next.claimed.m2) {
+      next.claimed.m2 = true;
+      claims += 1;
+    }
+    if (next.bestStreak >= MISSION_TARGETS.m3 && !next.claimed.m3) {
+      next.claimed.m3 = true;
+      claims += 1;
+    }
+    missionsRef.current = next;
+    setMissions(next);
+    saveMissions(next);
+    for (let i = 0; i < claims; i += 1) earnReward('mission');
+  }
+
+  /* ---- ⚡ 타임 어택 ---- */
+
+  function clearTaTimers() {
+    if (taIntervalRef.current) {
+      window.clearInterval(taIntervalRef.current);
+      taIntervalRef.current = null;
+    }
+    if (taFlashTimerRef.current) {
+      window.clearTimeout(taFlashTimerRef.current);
+      taFlashTimerRef.current = null;
+    }
+  }
+
+  /** 러닝 중 취소 (모드 전환·세션 중단·나가기): 점수 평가 없이 대기 화면으로. */
+  function cancelTimeAttack() {
+    clearTaTimers();
+    setTaPhase('idle');
+    setTaFlash(null);
+  }
+
+  function startTimeAttack() {
+    clearTaTimers();
+    taScoreRef.current = 0;
+    taTotalRef.current = 0;
+    setTaScore(0);
+    setTaTotal(0);
+    setTaFlash(null);
+    setTaRunEarned(false);
+    setTaTimeLeft(TA_SECONDS);
+    setTaSpot(randomSpot(spotFilter));
+    setTaPhase('running');
+    taEndRef.current = Date.now() + TA_SECONDS * 1000;
+    taIntervalRef.current = window.setInterval(() => {
+      const left = Math.max(0, Math.ceil((taEndRef.current - Date.now()) / 1000));
+      setTaTimeLeft(left);
+      if (left <= 0) finishTimeAttack();
+    }, 250);
+  }
+
+  /** 러닝 종료 (시간 만료 또는 수동 중단): 최고 기록 저장 + 일일 보상 1회. */
+  function finishTimeAttack() {
+    clearTaTimers();
+    setTaPhase('over');
+    setTaFlash(null);
+    const score = taScoreRef.current;
+    if (score > taBestRef.current) {
+      taBestRef.current = score;
+      setTaBest(score);
+      try {
+        window.localStorage.setItem(TA_BEST_KEY, String(score));
+      } catch {
+        /* ignore */
+      }
+    }
+    if (score >= TA_REWARD_SCORE) {
+      let already = false;
+      try {
+        const raw = window.localStorage.getItem(TA_CLAIM_KEY);
+        const c = raw ? (JSON.parse(raw) as { date?: string; claimed?: boolean }) : null;
+        already = !!c && c.date === todayStr() && !!c.claimed;
+      } catch {
+        /* ignore */
+      }
+      if (!already) {
+        try {
+          window.localStorage.setItem(TA_CLAIM_KEY, JSON.stringify({ date: todayStr(), claimed: true }));
+        } catch {
+          /* ignore */
+        }
+        setTaClaimedToday(true);
+        setTaRunEarned(true);
+        earnReward('timeattack');
+      }
+    }
+  }
+
+  /**
+   * 타임 어택 채점: 같은 믹스 허용 규칙, 즉시 다음 문제 (피드백 정지 없음).
+   * 전적(TrainerStats)은 오염시키지 않되 (saveStats 미호출) 미션 m1/m2에는 집계.
+   */
+  function taAnswer(a: PreflopAction) {
+    if (taPhase !== 'running' || !taSpot) return;
+    const best = Math.max(taSpot.mix.fold, taSpot.mix.call, taSpot.mix.raise);
+    const correct = taSpot.mix[a] >= best * 0.5;
+    taTotalRef.current += 1;
+    if (correct) taScoreRef.current += 1;
+    setTaTotal(taTotalRef.current);
+    setTaScore(taScoreRef.current);
+    setTaFlash(correct ? 'ok' : 'no');
+    if (taFlashTimerRef.current) window.clearTimeout(taFlashTimerRef.current);
+    taFlashTimerRef.current = window.setTimeout(() => setTaFlash(null), 400);
+    bumpMissions(correct, false);
+    setTaSpot(randomSpot(spotFilter));
+  }
+
+  /** 모드 전환: 타임 어택에서 나갈 때는 러닝/타이머를 반드시 취소. */
+  function switchMode(m: UiMode) {
+    if (m === mode) return;
+    if (mode === 'timeattack') cancelTimeAttack();
+    setMode(m);
+  }
+
+  /** 🔍 약점 분석 → 해당 상황 필터를 적용하고 프리플랍 드릴로 진입. */
+  function practiceWeak(filter: SpotFilter) {
+    if (mode === 'timeattack') cancelTimeAttack();
+    setMode('preflop');
+    setStopped(false);
+    changeSituation(filter);
+  }
+
   function answer(a: PreflopAction) {
     if (!spot || picked !== null) return;
     setPicked(a);
@@ -1154,6 +1484,7 @@ export default function TrainerPage() {
     const correct = spot.mix[a] >= best * 0.5; // mixed strategies accept close seconds
     const line = stats.byLine[spot.line] ?? { total: 0, correct: 0 };
     const pf = stats.byMode.preflop;
+    const pos = stats.byPos[spot.heroPos] ?? { total: 0, correct: 0 };
     const streak = correct ? stats.streak + 1 : 0;
     const next: TrainerStats = {
       ...stats,
@@ -1168,6 +1499,10 @@ export default function TrainerPage() {
       byMode: {
         ...stats.byMode,
         preflop: { total: pf.total + 1, correct: pf.correct + (correct ? 1 : 0) },
+      },
+      byPos: {
+        ...stats.byPos,
+        [spot.heroPos]: { total: pos.total + 1, correct: pos.correct + (correct ? 1 : 0) },
       },
       wrong: correct
         ? stats.wrong
@@ -1189,6 +1524,7 @@ export default function TrainerPage() {
     setStats(next);
     saveStats(next);
     setSession((s) => ({ ...s, total: s.total + 1, correct: s.correct + (correct ? 1 : 0) }));
+    bumpMissions(correct);
     if (correct) earnReward();
     if (autoNext) timerRef.current = window.setTimeout(() => nextSpot(), 1800);
   }
@@ -1214,12 +1550,14 @@ export default function TrainerPage() {
       return next;
     });
     setSession((s) => ({ ...s, total: s.total + 1, correct: s.correct + (correct ? 1 : 0) }));
+    bumpMissions(correct);
     if (correct) earnReward();
   }
 
   function retryWrong() {
     const notes = stats.wrong.filter((w): w is PreflopWrong => w.mode === 'preflop');
     if (!notes.length) return;
+    if (mode === 'timeattack') cancelTimeAttack(); // 타임어택 러닝/타이머 반드시 취소
     clearTimer();
     setStopped(false); // 세션 요약 화면에서 눌러도 바로 복습 드릴로 진입
     const spots = notes.map(rebuildSpot);
@@ -1247,6 +1585,15 @@ export default function TrainerPage() {
   const evLoss = spot && picked !== null ? Math.max(0, bestFreq - spot.mix[picked]) : 0;
   const hasPreflopWrong = stats.wrong.some((w) => w.mode === 'preflop');
   const sessionAccuracy = session.total ? Math.round((session.correct / session.total) * 100) : 0;
+
+  // 🔍 약점 분석: 표본 5개 이상인 라인/포지션별 정답률 (60% 미만 = 약점).
+  const lineChips = LINES.map((l) => ({ line: l, s: stats.byLine[l] }))
+    .filter((x) => x.s.total >= 5)
+    .map((x) => ({ line: x.line, total: x.s.total, pct: Math.round((x.s.correct / x.s.total) * 100) }));
+  const posChips = POSITIONS_6MAX.map((p) => ({ pos: p, s: stats.byPos[p] ?? { total: 0, correct: 0 } }))
+    .filter((x) => x.s.total >= 5)
+    .map((x) => ({ pos: x.pos, total: x.s.total, pct: Math.round((x.s.correct / x.s.total) * 100) }));
+  const taAccuracy = taTotal ? Math.round((taScore / taTotal) * 100) : 0;
 
   // 답변 후에만 액션별 EV 근사 계산 (몬테카를로 — 답 전에 돌리면 낭비).
   const evRows = useMemo(
@@ -1285,25 +1632,27 @@ export default function TrainerPage() {
 
       {/* Mode selector */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
-        {MODES.map((m) => {
+        {UI_MODES.map((m) => {
           const active = m === mode;
+          const accentColor = m === 'timeattack' ? 'var(--warn)' : 'var(--accent)';
+          const accentBg = m === 'timeattack' ? 'rgba(210,153,34,0.12)' : 'rgba(63,185,80,0.12)';
           return (
             <button
               key={m}
               type="button"
               className="secondary"
-              onClick={() => setMode(m)}
+              onClick={() => switchMode(m)}
               style={{
                 flex: '1 1 140px',
                 padding: '10px 12px',
                 fontSize: 14,
                 fontWeight: 800,
-                borderColor: active ? 'var(--accent)' : 'var(--border)',
-                color: active ? 'var(--accent)' : 'var(--text-dim)',
-                background: active ? 'rgba(63,185,80,0.12)' : 'var(--bg-elevated)',
+                borderColor: active ? accentColor : 'var(--border)',
+                color: active ? accentColor : 'var(--text-dim)',
+                background: active ? accentBg : 'var(--bg-elevated)',
               }}
             >
-              {MODE_KO[m]}
+              {UI_MODE_KO[m]}
             </button>
           );
         })}
@@ -1322,7 +1671,11 @@ export default function TrainerPage() {
           {!stopped && (
             <button
               className="secondary"
-              onClick={() => { clearTimer(); setStopped(true); }}
+              onClick={() => {
+                clearTimer();
+                if (mode === 'timeattack') cancelTimeAttack();
+                setStopped(true);
+              }}
               style={{ padding: '6px 14px', fontSize: 13 }}
             >
               ⏹ 그만하기
@@ -1394,6 +1747,61 @@ export default function TrainerPage() {
         )}
       </div>
 
+      {/* 🎯 일일 미션 (모든 모드의 답안이 집계, 달성 시 자동 보상) */}
+      <div className="card" style={{ padding: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <h2 style={{ margin: 0, fontSize: 16 }}>
+            🎯 일일 미션{' '}
+            <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>({missions.date})</span>
+          </h2>
+          <button
+            className="secondary"
+            onClick={() => setMissionsOpen((o) => !o)}
+            style={{ padding: '4px 12px', fontSize: 13 }}
+          >
+            {missionsOpen ? '접기 ▲' : '펼치기 ▼'}
+          </button>
+        </div>
+        {missionsOpen && (
+          <div style={{ marginTop: 10, display: 'grid', gap: 8 }}>
+            {(
+              [
+                ['m1', `문제 ${MISSION_TARGETS.m1}개 풀기`, missions.solved, MISSION_TARGETS.m1],
+                ['m2', `정답 ${MISSION_TARGETS.m2}개 맞히기`, missions.correct, MISSION_TARGETS.m2],
+                ['m3', `${MISSION_TARGETS.m3}연속 정답`, missions.bestStreak, MISSION_TARGETS.m3],
+              ] as const
+            ).map(([id, label, cur, target]) => {
+              const done = missions.claimed[id];
+              const clamped = Math.min(cur, target);
+              return (
+                <div key={id} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <span style={{ flex: '0 0 160px', fontSize: 13, fontWeight: 700, color: done ? 'var(--accent)' : 'var(--text)' }}>
+                    {done ? '✅ ' : ''}
+                    {label}
+                  </span>
+                  <div style={{ flex: '1 1 120px', height: 10, borderRadius: 5, background: 'var(--bg-elevated)', border: '1px solid var(--border)', overflow: 'hidden' }}>
+                    <div
+                      style={{
+                        width: `${Math.round((clamped / target) * 100)}%`,
+                        height: '100%',
+                        background: done ? 'var(--accent)' : 'var(--warn)',
+                      }}
+                    />
+                  </div>
+                  <span className="muted" style={{ flex: '0 0 52px', textAlign: 'right', fontSize: 12, fontVariantNumeric: 'tabular-nums' }}>
+                    {clamped}/{target}
+                  </span>
+                </div>
+              );
+            })}
+            <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+              미션 달성 시 자동으로 +5,000 게임머니가 지급됩니다 (로그인 시 · 일일 상한 적용). 타임
+              어택 답안도 풀기/정답 미션에 포함됩니다.
+            </p>
+          </div>
+        )}
+      </div>
+
       {/* Drill card (or session summary when stopped). The drills stay
           MOUNTED while stopped (hidden) so their question + filters survive
           '이어서 하기'. */}
@@ -1444,6 +1852,172 @@ export default function TrainerPage() {
           <ChipEvDrill onGraded={recordQuiz} />
         ) : mode === 'icm' ? (
           <IcmDrill onGraded={recordQuiz} />
+        ) : mode === 'timeattack' ? (
+          taPhase === 'idle' ? (
+            <div>
+              <h2 style={{ margin: '0 0 6px', fontSize: 18 }}>⚡ 타임 어택 — {TA_SECONDS}초 스피드런</h2>
+              <p className="muted" style={{ fontSize: 13, margin: '0 0 12px' }}>
+                {TA_SECONDS}초 동안 프리플랍 문제를 최대한 많이 맞히세요. 답과 동시에 다음 문제로
+                넘어갑니다 (피드백 정지 없음, ✓/✗만 잠깐 표시). {TA_REWARD_SCORE}점 이상이면 하루 1회
+                +2,000 게임머니. 전적(정답률·오답 노트)에는 반영되지 않지만 일일 미션(풀기/정답)에는
+                포함됩니다.
+              </p>
+              {/* 상황 설정 (프리플랍 드릴과 동일 필터 재사용) */}
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 12, padding: '8px 10px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 10 }}>
+                <div style={{ flex: '1 1 140px' }}>
+                  <label style={{ fontSize: 12 }}>라인</label>
+                  <select
+                    value={spotFilter.line}
+                    onChange={(e) => changeFilterOnly({ line: e.target.value as ActionLine | '' })}
+                  >
+                    <option value="">전체 (랜덤)</option>
+                    {LINES.map((l) => (
+                      <option key={l} value={l}>{LINE_KO[l]}</option>
+                    ))}
+                  </select>
+                </div>
+                <div style={{ flex: '1 1 130px' }}>
+                  <label style={{ fontSize: 12 }}>내 포지션</label>
+                  <select
+                    value={spotFilter.heroPos}
+                    onChange={(e) => changeFilterOnly({ heroPos: e.target.value as Position | '' })}
+                  >
+                    <option value="">전체 (랜덤)</option>
+                    {heroesFor(spotFilter.line).map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <button onClick={startTimeAttack} style={{ fontSize: 16, fontWeight: 800, padding: '12px 22px' }}>
+                  ▶ 시작 ({TA_SECONDS}초)
+                </button>
+                <span className="muted" style={{ fontSize: 13 }}>
+                  최고 기록: <strong style={{ color: 'var(--warn)' }}>{taBest}점</strong>
+                  {taClaimedToday && ' · 오늘 보상 수령 완료'}
+                </span>
+              </div>
+            </div>
+          ) : taPhase === 'over' ? (
+            <div style={{ textAlign: 'center', padding: '10px 0' }}>
+              <h2 style={{ margin: '0 0 4px' }}>⚡ 타임 어택 종료</h2>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center', margin: '14px 0 14px' }}>
+                {[
+                  ['점수', `${taScore}점`],
+                  ['정답률', taTotal ? `${taAccuracy}% (${taScore}/${taTotal})` : '—'],
+                  ['최고 기록', `${taBest}점`],
+                ].map(([k, v]) => (
+                  <div
+                    key={k}
+                    style={{
+                      flex: '1 1 130px',
+                      maxWidth: 200,
+                      background: 'var(--bg-elevated)',
+                      border: '1px solid var(--border)',
+                      borderRadius: 10,
+                      padding: '12px 14px',
+                    }}
+                  >
+                    <div className="muted" style={{ fontSize: 12 }}>{k}</div>
+                    <div style={{ fontSize: 20, fontWeight: 800 }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+              {taScore >= TA_REWARD_SCORE ? (
+                taRunEarned ? (
+                  <p style={{ fontSize: 14, fontWeight: 700, color: 'var(--warn)', margin: '0 0 14px' }}>
+                    🎉 {TA_REWARD_SCORE}점 달성 — +2,000 게임머니 지급! (로그인 시)
+                  </p>
+                ) : (
+                  <p className="muted" style={{ fontSize: 13, margin: '0 0 14px' }}>
+                    {TA_REWARD_SCORE}점 달성! 오늘 타임 어택 보상은 이미 받았습니다.
+                  </p>
+                )
+              ) : (
+                <p className="muted" style={{ fontSize: 13, margin: '0 0 14px' }}>
+                  {TA_REWARD_SCORE}점 이상이면 하루 1회 게임머니 보상이 있습니다.
+                </p>
+              )}
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+                <button onClick={startTimeAttack}>🔄 다시 도전</button>
+                <button className="secondary" onClick={cancelTimeAttack}>
+                  나가기
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+                <div
+                  style={{
+                    fontSize: 40,
+                    fontWeight: 900,
+                    fontVariantNumeric: 'tabular-nums',
+                    color: taTimeLeft <= 10 ? 'var(--danger)' : 'var(--warn)',
+                  }}
+                >
+                  ⏱ {taTimeLeft}s
+                </div>
+                <div style={{ fontSize: 18, fontWeight: 800 }}>
+                  점수 {taScore} <span className="muted" style={{ fontSize: 13 }}>/ {taTotal}문제</span>
+                  <span
+                    style={{
+                      display: 'inline-block',
+                      width: 32,
+                      marginLeft: 8,
+                      fontSize: 26,
+                      fontWeight: 900,
+                      color: taFlash === 'ok' ? 'var(--accent)' : 'var(--danger)',
+                      visibility: taFlash ? 'visible' : 'hidden',
+                    }}
+                  >
+                    {taFlash === 'no' ? '✗' : '✓'}
+                  </span>
+                </div>
+              </div>
+              {taSpot && (
+                <>
+                  <p style={{ fontSize: 16, fontWeight: 600, margin: '4px 0 12px' }}>{situationText(taSpot)}</p>
+                  <PositionRow
+                    heroPos={taSpot.heroPos}
+                    villainPos={taSpot.villainPos}
+                    stackBB={STACK_BB}
+                    villainRole={taSpot.line === 'RFI-vs-3bet' ? '3벳터' : '오프너'}
+                  />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+                    <HoleCards combo={taSpot.combo} />
+                    <div style={{ fontSize: 20, fontWeight: 800 }}>{taSpot.label}</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {actionsFor(taSpot.line).map((a) => (
+                      <button
+                        key={a}
+                        type="button"
+                        className="secondary"
+                        onClick={() => taAnswer(a)}
+                        style={{
+                          flex: '1 1 90px',
+                          padding: '14px 10px',
+                          fontSize: 16,
+                          fontWeight: 800,
+                          borderColor: ACTION_COLORS[a],
+                          color: ACTION_COLORS[a],
+                        }}
+                      >
+                        {actionName(taSpot.line, a)}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ marginTop: 12 }}>
+                    <button className="secondary" onClick={finishTimeAttack} style={{ padding: '6px 14px', fontSize: 13 }}>
+                      ⏹ 중단하고 결과 보기
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )
         ) : !spot ? (
           <p className="muted">문제를 생성하는 중…</p>
         ) : (
@@ -1667,6 +2241,20 @@ export default function TrainerPage() {
                   </div>
                 )}
 
+                {/* 규칙 기반 해설 — 최적 빈도·근소 차선 여부·EV 비교 (모두 데이터 파생) */}
+                <p
+                  style={{
+                    fontSize: 13,
+                    margin: '10px 0 0',
+                    padding: '8px 10px',
+                    background: 'var(--bg-elevated)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                  }}
+                >
+                  💡 {buildExplanation(spot, picked, evRows)}
+                </p>
+
                 <p className="muted" style={{ fontSize: 13, margin: '10px 0 12px' }}>
                   13×13 그리드에서 <strong style={{ color: 'var(--text)' }}>{spot.label}</strong> 셀은 «{spot.chartLabel}» 차트 기준{' '}
                   {mixSummary(spot.line, spot.mix)} 믹스입니다 — 최적 액션은{' '}
@@ -1693,6 +2281,112 @@ export default function TrainerPage() {
           </>
         )}
         </div>
+      </div>
+
+      {/* 🔍 약점 분석 — 라인/포지션별 정답률 (표본 5+), 60% 미만은 약점 표시 */}
+      <div className="card" style={{ padding: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <h2 style={{ margin: 0, fontSize: 16 }}>🔍 약점 분석</h2>
+          <button
+            className="secondary"
+            onClick={() => setWeakOpen((o) => !o)}
+            style={{ padding: '4px 12px', fontSize: 13 }}
+          >
+            {weakOpen ? '접기 ▲' : '펼치기 ▼'}
+          </button>
+        </div>
+        {weakOpen &&
+          (lineChips.length === 0 && posChips.length === 0 ? (
+            <p className="muted" style={{ margin: '10px 0 0', fontSize: 13 }}>
+              아직 표본이 부족합니다 — 프리플랍 드릴에서 라인/포지션별로 5문제 이상 풀면 정답률이
+              표시됩니다.
+            </p>
+          ) : (
+            <div style={{ marginTop: 10, display: 'grid', gap: 10 }}>
+              {lineChips.length > 0 && (
+                <div>
+                  <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>라인별 (프리플랍)</div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {lineChips.map((c) => {
+                      const weak = c.pct < 60;
+                      return (
+                        <span
+                          key={c.line}
+                          className="pill"
+                          style={{
+                            background: weak ? 'rgba(248,81,73,0.12)' : 'var(--bg-elevated)',
+                            border: `1px solid ${weak ? 'var(--danger)' : 'var(--border)'}`,
+                            color: 'var(--text)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 6,
+                          }}
+                        >
+                          {LINE_SHORT[c.line]}{' '}
+                          <strong style={{ color: weak ? 'var(--danger)' : c.pct >= 70 ? 'var(--accent)' : 'var(--warn)' }}>
+                            {c.pct}%
+                          </strong>
+                          <span className="muted" style={{ fontSize: 11 }}>({c.total}문제)</span>
+                          {weak && (
+                            <button
+                              className="secondary"
+                              onClick={() => practiceWeak({ line: c.line, heroPos: '' })}
+                              style={{ padding: '2px 8px', fontSize: 11, color: 'var(--danger)', borderColor: 'var(--danger)' }}
+                            >
+                              이 상황 연습하기
+                            </button>
+                          )}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {posChips.length > 0 && (
+                <div>
+                  <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>내 포지션별 (프리플랍)</div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {posChips.map((c) => {
+                      const weak = c.pct < 60;
+                      return (
+                        <span
+                          key={c.pos}
+                          className="pill"
+                          style={{
+                            background: weak ? 'rgba(248,81,73,0.12)' : 'var(--bg-elevated)',
+                            border: `1px solid ${weak ? 'var(--danger)' : 'var(--border)'}`,
+                            color: 'var(--text)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 6,
+                          }}
+                        >
+                          {c.pos}{' '}
+                          <strong style={{ color: weak ? 'var(--danger)' : c.pct >= 70 ? 'var(--accent)' : 'var(--warn)' }}>
+                            {c.pct}%
+                          </strong>
+                          <span className="muted" style={{ fontSize: 11 }}>({c.total}문제)</span>
+                          {weak && (
+                            <button
+                              className="secondary"
+                              onClick={() => practiceWeak({ line: '', heroPos: c.pos })}
+                              style={{ padding: '2px 8px', fontSize: 11, color: 'var(--danger)', borderColor: 'var(--danger)' }}
+                            >
+                              이 상황 연습하기
+                            </button>
+                          )}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+                정답률 60% 미만(표본 5문제 이상)은 빨간색으로 표시되며, 버튼으로 해당 상황 필터를 바로
+                적용할 수 있습니다. 타임 어택 답안은 집계되지 않습니다.
+              </p>
+            </div>
+          ))}
       </div>
 
       {/* Wrong-answer notebook */}
