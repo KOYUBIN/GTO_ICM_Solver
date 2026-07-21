@@ -223,6 +223,7 @@ function Landing({
   const [extraLevels, setExtraLevels] = useState<{ smallBlind: number; bigBlind: number; ante: number }[]>([]);
   const [joinCode, setJoinCode] = useState('');
   const [isPublic, setIsPublic] = useState(true);
+  const [aiCount, setAiCount] = useState(0);
   const [lobby, setLobby] = useState<PublicRoomSummary[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -328,6 +329,7 @@ function Landing({
         name: roomName.trim() || `${name}의 테이블`,
         hostName: name.trim(),
         config: buildConfig(),
+        aiCount,
       });
       onEnter(room.id, playerId, name.trim());
     } catch (e) {
@@ -655,6 +657,34 @@ function Landing({
             />
             공개 테이블 목록에 표시 (끄면 코드로만 참가 가능)
           </label>
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <label>🤖 AI 플레이어 (혼자서도 바로 게임!)</label>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+            {[0, 1, 2, 3, 4, 5].map((n) => (
+              <button
+                key={n}
+                type="button"
+                className="secondary"
+                onClick={() => setAiCount(n)}
+                style={{
+                  padding: '8px 14px',
+                  fontWeight: 700,
+                  borderColor: aiCount === n ? 'var(--accent)' : 'var(--border)',
+                  color: aiCount === n ? 'var(--accent)' : 'var(--text-dim)',
+                  background: aiCount === n ? 'rgba(63,185,80,0.12)' : 'var(--bg-elevated)',
+                }}
+              >
+                {n === 0 ? '없음' : `${n}명`}
+              </button>
+            ))}
+          </div>
+          {aiCount > 0 && (
+            <p className="muted" style={{ margin: '8px 0 0', fontSize: 13 }}>
+              AI {aiCount}명이 함께 앉습니다. AI는 자동으로 플레이하며(숏스택 푸시폴드·핸드 강도 기반)
+              상금 정산 대상은 아닙니다.
+            </p>
+          )}
         </div>
         {!showCustom && presetId === 'monster' && (
           <p className="muted" style={{ marginTop: 14, marginBottom: 0 }}>

@@ -15,6 +15,8 @@ export interface RoomPlayer {
   seat: number;
   /** Linked member account (username), if this player is logged in. */
   account?: string;
+  /** Server-driven AI player (acts automatically on poll ticks). */
+  isBot?: boolean;
 }
 
 /** How the table's blinds/stacks were configured. */
@@ -159,6 +161,8 @@ export async function createRoom(payload: {
   name: string;
   hostName: string;
   config: RoomConfig;
+  /** Number of AI players to seat (0-5). */
+  aiCount?: number;
 }): Promise<{ room: Room; playerId: string }> {
   const res = await fetch('/api/rooms', {
     method: 'POST',

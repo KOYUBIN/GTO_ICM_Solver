@@ -46,6 +46,7 @@ export async function POST(req: NextRequest) {
       (raw.hostName ?? '').toString(),
       config,
       me?.username,
+      num((raw as { aiCount?: unknown }).aiCount, 0),
     );
     return NextResponse.json({ room, playerId }, { status: 201 });
   } catch (e) {
