@@ -35,6 +35,10 @@ export type PublicUser = {
   games: number;
   /** Experience points, granted alongside earned game money (레벨 계산용). */
   xp: number;
+  /** Consecutive-day attendance streak. */
+  dailyStreak: number;
+  /** YYYY-MM-DD of the last claimed attendance bonus. */
+  lastDaily: string;
 };
 
 /** New accounts start with this much game money. */
@@ -57,6 +61,10 @@ type UserRec = {
   earnedToday: number;
   /** YYYY-MM-DD the earnedToday counter belongs to. */
   earnDay: string;
+  /** Consecutive-day attendance streak. */
+  dailyStreak: number;
+  /** YYYY-MM-DD of the last claimed attendance bonus. */
+  lastDaily: string;
 };
 
 type SessionRec = { token: string; userId: string; createdAt: string };
@@ -70,6 +78,8 @@ function toPublic(u: UserRec): PublicUser {
     wins: u.wins ?? 0,
     games: u.games ?? 0,
     xp: u.xp ?? 0,
+    dailyStreak: u.dailyStreak ?? 0,
+    lastDaily: u.lastDaily ?? '',
   };
 }
 
@@ -84,6 +94,8 @@ function normalizeUser(u: UserRec): UserRec {
     xp: u.xp ?? 0,
     earnedToday: u.earnedToday ?? 0,
     earnDay: u.earnDay ?? '',
+    dailyStreak: u.dailyStreak ?? 0,
+    lastDaily: u.lastDaily ?? '',
   };
 }
 
@@ -204,6 +216,8 @@ function pgEnsure(): Promise<void> {
       await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS earned_today bigint NOT NULL DEFAULT 0`;
       await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS earn_day text NOT NULL DEFAULT ''`;
       await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS xp bigint NOT NULL DEFAULT 0`;
+      await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_streak integer NOT NULL DEFAULT 0`;
+      await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_daily text NOT NULL DEFAULT ''`;
       await pg().sql`CREATE TABLE IF NOT EXISTS sessions (
         token text PRIMARY KEY,
         user_id text NOT NULL,
@@ -229,6 +243,8 @@ function rowToUser(r: Record<string, unknown>): UserRec {
     xp: Number(r.xp ?? 0),
     earnedToday: Number(r.earned_today ?? 0),
     earnDay: String(r.earn_day ?? ''),
+    dailyStreak: Number(r.daily_streak ?? 0),
+    lastDaily: String(r.last_daily ?? ''),
   };
 }
 
@@ -260,9 +276,9 @@ async function getUserById(id: string): Promise<UserRec | undefined> {
 async function insertUser(user: UserRec): Promise<void> {
   if (usePg) {
     await pgEnsure();
-    const res = await pg().sql`INSERT INTO users (id, username, nick, pass_hash, salt, created_at, balance, points, wins, games, xp, earned_today, earn_day)
+    const res = await pg().sql`INSERT INTO users (id, username, nick, pass_hash, salt, created_at, balance, points, wins, games, xp, earned_today, earn_day, daily_streak, last_daily)
       VALUES (${user.id}, ${user.username}, ${user.nick}, ${user.passHash}, ${user.salt}, ${user.createdAt},
-              ${user.balance}, ${user.points}, ${user.wins}, ${user.games}, ${user.xp}, ${user.earnedToday}, ${user.earnDay})
+              ${user.balance}, ${user.points}, ${user.wins}, ${user.games}, ${user.xp}, ${user.earnedToday}, ${user.earnDay}, ${user.dailyStreak}, ${user.lastDaily})
       ON CONFLICT (username) DO NOTHING`;
     if (res.rowCount === 0) throw new Error('이미 사용 중인 아이디입니다.');
     return;
@@ -366,6 +382,8 @@ export async function register(
     xp: 0,
     earnedToday: 0,
     earnDay: '',
+    dailyStreak: 0,
+    lastDaily: '',
   };
   await insertUser(user);
   const token = await createSession(user.id);
@@ -457,6 +475,81 @@ export async function earn(
     await saveEconomyFile(u);
   }
   return { balance: u.balance, earned: grant, capped: grant < Math.floor(amount) };
+}
+
+// ---------- daily attendance bonus ----------
+
+/** 7-day attendance reward cycle (game money). Day 7 is the big payout. */
+export const DAILY_REWARDS = [50_000, 60_000, 80_000, 100_000, 120_000, 150_000, 300_000];
+
+/** YYYY-MM-DD one day before today (UTC, matching today()). */
+function yesterday(): string {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+export type DailyStatus = {
+  canClaim: boolean;
+  streak: number;
+  /** 1-based day within the 7-day cycle the NEXT claim would land on. */
+  dayInCycle: number;
+  /** Reward the next claim would grant. */
+  nextReward: number;
+  rewards: number[];
+};
+
+/** Current attendance status without mutating (for the claim UI). */
+export async function dailyStatus(username: string): Promise<DailyStatus> {
+  const rec = await findUserByUsername(username);
+  if (!rec) throw new Error('로그인이 필요합니다.');
+  const u = normalizeUser(rec);
+  const claimedToday = u.lastDaily === today();
+  // If the streak is unbroken (claimed yesterday) the next claim continues it;
+  // otherwise the next claim restarts at day 1.
+  const continues = u.lastDaily === yesterday() || claimedToday;
+  const nextStreak = claimedToday ? u.dailyStreak : continues ? u.dailyStreak + 1 : 1;
+  const dayInCycle = ((Math.max(1, nextStreak) - 1) % 7) + 1;
+  return {
+    canClaim: !claimedToday,
+    streak: u.dailyStreak,
+    dayInCycle,
+    nextReward: DAILY_REWARDS[dayInCycle - 1],
+    rewards: DAILY_REWARDS,
+  };
+}
+
+/**
+ * Claim today's attendance bonus. Idempotent per UTC day. Grants game money
+ * (bypasses the activity earn cap — it is a distinct daily reward) plus XP,
+ * and advances or resets the streak.
+ */
+export async function claimDaily(
+  username: string,
+): Promise<{ claimed: boolean; reward: number; streak: number; dayInCycle: number; balance: number; already?: boolean }> {
+  const rec = await findUserByUsername(username);
+  if (!rec) throw new Error('로그인이 필요합니다.');
+  const u = normalizeUser(rec);
+  const day = today();
+  if (u.lastDaily === day) {
+    return { claimed: false, already: true, reward: 0, streak: u.dailyStreak, dayInCycle: ((Math.max(1, u.dailyStreak) - 1) % 7) + 1, balance: u.balance };
+  }
+  const newStreak = u.lastDaily === yesterday() ? u.dailyStreak + 1 : 1;
+  const dayInCycle = ((newStreak - 1) % 7) + 1;
+  const reward = DAILY_REWARDS[dayInCycle - 1];
+  const xpGain = Math.max(1, Math.round(reward / 100));
+  u.balance += reward;
+  u.xp += xpGain;
+  u.dailyStreak = newStreak;
+  u.lastDaily = day;
+  if (usePg) {
+    await pgEnsure();
+    await pg().sql`UPDATE users SET balance = balance + ${reward}, xp = xp + ${xpGain},
+      daily_streak = ${newStreak}, last_daily = ${day} WHERE id = ${u.id} AND last_daily <> ${day}`;
+  } else {
+    await saveEconomyFile(u);
+  }
+  return { claimed: true, reward, streak: newStreak, dayInCycle, balance: u.balance };
 }
 
 /** Spend game money (buy-in / rebuy). Throws if the balance is too low. */
