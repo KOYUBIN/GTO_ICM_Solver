@@ -292,7 +292,43 @@ function safeAction(la: ReturnType<typeof legalActions>, prefer: Action): Action
  * action. Preflop: Chen score bands + push/fold when short. Postflop: made-
  * hand category with a small bluff frequency. Randomness keeps it non-robotic.
  */
-function botAction(st: TableState, seatIdx: number): Action {
+export type BotLevel = 'easy' | 'normal' | 'hard';
+
+interface BotParams {
+  premiumScore: number; // Chen ≥ → premium raise/3bet
+  openScore: number; // Chen ≥ → will open playable
+  openFreq: number; // freq of opening a playable hand
+  callWideBB: number; // max bb to flat-call preflop with a playable hand
+  weakCallFreq: number; // freq of a cheap call with a weak hand (calling-station-ness)
+  valueRaise: number; // freq to raise 2pair+ postflop
+  valueBet: number; // freq to bet 2pair+ postflop
+  pairBet: number; // freq to bet top pair
+  onePairPrice: number; // max pot-odds price to call with one pair
+  weakPairPrice: number; // max price to call with a weak pair
+  bluff: number; // high-card bluff freq
+  floatPrice: number; // max price to call light with a high card
+}
+
+const BOT_PARAMS: Record<BotLevel, BotParams> = {
+  // 루즈-패시브 콜링스테이션: 너무 많이 콜하고 잘 안 접는다.
+  easy: {
+    premiumScore: 12, openScore: 9, openFreq: 0.2, callWideBB: 5.5, weakCallFreq: 0.6,
+    valueRaise: 0.3, valueBet: 0.5, pairBet: 0.3, onePairPrice: 0.5, weakPairPrice: 0.4, bluff: 0.04, floatPrice: 0.18,
+  },
+  // 아마추어 중수 (기존 정책).
+  normal: {
+    premiumScore: 11, openScore: 8, openFreq: 0.5, callWideBB: 3.5, weakCallFreq: 0.5,
+    valueRaise: 0.7, valueBet: 0.85, pairBet: 0.55, onePairPrice: 0.38, weakPairPrice: 0.25, bluff: 0.12, floatPrice: 0.08,
+  },
+  // 타이트-어그레시브: 마진 핸드 접고, 밸류·블러프 공격적.
+  hard: {
+    premiumScore: 10, openScore: 8, openFreq: 0.72, callWideBB: 3, weakCallFreq: 0.2,
+    valueRaise: 0.85, valueBet: 0.9, pairBet: 0.62, onePairPrice: 0.32, weakPairPrice: 0.18, bluff: 0.22, floatPrice: 0.05,
+  },
+};
+
+function botAction(st: TableState, seatIdx: number, level: BotLevel = 'normal'): Action {
+  const p = BOT_PARAMS[level] ?? BOT_PARAMS.normal;
   const seat = st.seats[seatIdx];
   const la = legalActions(st);
   const bb = st.bigBlind || 1;
@@ -300,37 +336,37 @@ function botAction(st: TableState, seatIdx: number): Action {
   const stackBB = seat.stack / bb;
   const rand = Math.random();
   const potNow =
-    st.pots.reduce((a, p) => a + p.amount, 0) + st.seats.reduce((a, s) => a + s.committedThisStreet, 0);
+    st.pots.reduce((a, p2) => a + p2.amount, 0) + st.seats.reduce((a, s) => a + s.committedThisStreet, 0);
   const raiseTo = (target: number) =>
     Math.max(la.minRaiseTo, Math.min(la.maxRaiseTo, Math.round(target)));
 
   if (st.currentStreet === 'preflop') {
     const label = holeLabel(seat.holeCards[0], seat.holeCards[1]);
     const score = chenScore(label);
-    // 숏스택: 푸시/폴드 차트를 따른다.
+    // 숏스택: 푸시/폴드 차트를 따른다 (모든 난이도 공통 — 이론적으로 옳음).
     if (stackBB <= 12) {
       const behind = Math.max(1, st.seats.filter((s) => s.status === 'active').length - 1);
       const adv = pushFoldAdvice(label, Math.max(1, Math.round(stackBB)), behind);
       if (adv.action === 'push') return safeAction(la, { type: 'allin' });
       if (adv.action === 'fold' && toCall > 0) return safeAction(la, { type: 'fold' });
     }
-    if (score >= 11) {
+    if (score >= p.premiumScore) {
       // 프리미엄: 레이즈/3벳, 막히면 콜.
       if (la.actions.includes('raise')) return { type: 'raise', amount: raiseTo(st.currentBet > bb ? st.currentBet * 3 : bb * 2.5) };
       return safeAction(la, { type: 'call' });
     }
-    if (score >= 8) {
+    if (score >= p.openScore) {
       // 플레이 가능: 가끔 오픈, 적당한 가격이면 콜.
-      if (st.currentBet <= bb && la.actions.includes('raise') && rand < 0.5) {
+      if (st.currentBet <= bb && la.actions.includes('raise') && rand < p.openFreq) {
         return { type: 'raise', amount: raiseTo(bb * 2.5) };
       }
-      if (toCall <= bb * 3.5) return safeAction(la, { type: 'call' });
-      if (score >= 10 && toCall <= bb * 9) return safeAction(la, { type: 'call' });
+      if (toCall <= bb * p.callWideBB) return safeAction(la, { type: 'call' });
+      if (score >= p.openScore + 2 && toCall <= bb * 9) return safeAction(la, { type: 'call' });
       return safeAction(la, { type: 'fold' });
     }
-    // 약한 핸드: 공짜면 체크, SB 완성 가끔, 나머지 폴드.
+    // 약한 핸드: 공짜면 체크, 싼 콜은 가끔(난이도별), 나머지 폴드.
     if (la.actions.includes('check')) return { type: 'check' };
-    if (toCall <= bb * 0.5 && rand < 0.5) return safeAction(la, { type: 'call' });
+    if (toCall <= bb * (level === 'easy' ? 1.5 : 0.5) && rand < p.weakCallFreq) return safeAction(la, { type: 'call' });
     return safeAction(la, { type: 'fold' });
   }
 
@@ -338,26 +374,26 @@ function botAction(st: TableState, seatIdx: number): Action {
   const cat = categoryOf(evaluate7([...seat.holeCards, ...st.board]));
   const boardPaired = new Set(st.board.map((c) => cardRank(c))).size < st.board.length;
   const strongPair = cat === 1 && seat.holeCards.some((h) => st.board.every((b) => cardRank(h) >= cardRank(b)));
+  const price = toCall / Math.max(1, potNow + toCall);
   if (cat >= 2 && !(cat === 2 && boardPaired && rand < 0.3)) {
     // 투페어+: 밸류 벳/레이즈, 콜은 항상.
-    if (la.actions.includes('raise') && rand < 0.7) return { type: 'raise', amount: raiseTo(potNow * 0.7 + toCall) };
-    if (la.actions.includes('bet') && rand < 0.85) return { type: 'bet', amount: raiseTo(potNow * 0.65) };
+    if (la.actions.includes('raise') && rand < p.valueRaise) return { type: 'raise', amount: raiseTo(potNow * 0.7 + toCall) };
+    if (la.actions.includes('bet') && rand < p.valueBet) return { type: 'bet', amount: raiseTo(potNow * 0.65) };
     return safeAction(la, { type: 'call' });
   }
   if (cat === 1) {
     // 원페어: 탑페어면 밸류/콜, 아니면 팟 컨트롤.
-    if (strongPair && la.actions.includes('bet') && rand < 0.55) return { type: 'bet', amount: raiseTo(potNow * 0.5) };
+    if (strongPair && la.actions.includes('bet') && rand < p.pairBet) return { type: 'bet', amount: raiseTo(potNow * 0.5) };
     if (toCall === 0) return safeAction(la, { type: 'check' });
-    const price = toCall / Math.max(1, potNow + toCall);
-    if (price <= (strongPair ? 0.38 : 0.25)) return safeAction(la, { type: 'call' });
+    if (price <= (strongPair ? p.onePairPrice : p.weakPairPrice)) return safeAction(la, { type: 'call' });
     return safeAction(la, { type: 'fold' });
   }
-  // 하이카드: 체크, 가끔 블러프, 아주 싼 콜만.
+  // 하이카드: 체크, 가끔 블러프, 싼 콜만(난이도별).
   if (toCall === 0) {
-    if (la.actions.includes('bet') && rand < 0.12) return { type: 'bet', amount: raiseTo(potNow * 0.5) };
+    if (la.actions.includes('bet') && rand < p.bluff) return { type: 'bet', amount: raiseTo(potNow * 0.5) };
     return safeAction(la, { type: 'check' });
   }
-  if (toCall <= potNow * 0.08 && rand < 0.35) return safeAction(la, { type: 'call' });
+  if (price <= p.floatPrice && rand < (level === 'easy' ? 0.5 : 0.35)) return safeAction(la, { type: 'call' });
   return safeAction(la, { type: 'fold' });
 }
 
@@ -377,7 +413,7 @@ function tickBots(room: Room): boolean {
     const seatId = st.seats[st.toAct].id;
     let act: Action;
     try {
-      act = botAction(st, st.toAct);
+      act = botAction(st, st.toAct, room.config.botLevel ?? 'normal');
     } catch {
       const la = legalActions(st);
       act = la.actions.includes('check') ? { type: 'check' } : { type: 'fold' };

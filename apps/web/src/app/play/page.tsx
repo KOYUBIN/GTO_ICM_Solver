@@ -224,6 +224,7 @@ function Landing({
   const [joinCode, setJoinCode] = useState('');
   const [isPublic, setIsPublic] = useState(true);
   const [aiCount, setAiCount] = useState(0);
+  const [botLevel, setBotLevel] = useState<'easy' | 'normal' | 'hard'>('normal');
   const [lobby, setLobby] = useState<PublicRoomSummary[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -302,6 +303,7 @@ function Landing({
         presetId: 'custom',
         presetName: '커스텀',
         isPublic,
+        botLevel,
         startingStack: custom.startingStack,
         smallBlind: custom.smallBlind,
         bigBlind: custom.bigBlind,
@@ -313,7 +315,7 @@ function Landing({
         levels,
       };
     }
-    return { ...presetToConfig(getPreset(presetId)), isPublic };
+    return { ...presetToConfig(getPreset(presetId)), isPublic, botLevel };
   }
 
   async function onCreate() {
@@ -680,10 +682,40 @@ function Landing({
             ))}
           </div>
           {aiCount > 0 && (
-            <p className="muted" style={{ margin: '8px 0 0', fontSize: 13 }}>
-              AI {aiCount}명이 함께 앉습니다. AI는 자동으로 플레이하며(숏스택 푸시폴드·핸드 강도 기반)
-              상금 정산 대상은 아닙니다.
-            </p>
+            <>
+              <div style={{ marginTop: 10 }}>
+                <label style={{ fontSize: 13 }}>AI 난이도</label>
+                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                  {([
+                    ['easy', '쉬움', '콜을 많이 하는 초보'],
+                    ['normal', '보통', '아마추어 중수'],
+                    ['hard', '어려움', '타이트·공격적'],
+                  ] as const).map(([lv, ko, desc]) => (
+                    <button
+                      key={lv}
+                      type="button"
+                      className="secondary"
+                      onClick={() => setBotLevel(lv)}
+                      title={desc}
+                      style={{
+                        flex: 1,
+                        padding: '8px 6px',
+                        fontWeight: 700,
+                        borderColor: botLevel === lv ? 'var(--accent)' : 'var(--border)',
+                        color: botLevel === lv ? 'var(--accent)' : 'var(--text-dim)',
+                        background: botLevel === lv ? 'rgba(63,185,80,0.12)' : 'var(--bg-elevated)',
+                      }}
+                    >
+                      {ko}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <p className="muted" style={{ margin: '8px 0 0', fontSize: 13 }}>
+                AI {aiCount}명이 함께 앉습니다(난이도: {botLevel === 'easy' ? '쉬움' : botLevel === 'hard' ? '어려움' : '보통'}).
+                자동으로 플레이하며 상금 정산 대상은 아닙니다.
+              </p>
+            </>
           )}
         </div>
         {!showCustom && presetId === 'monster' && (

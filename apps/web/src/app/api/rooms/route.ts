@@ -32,6 +32,7 @@ export async function POST(req: NextRequest) {
     rebuyStack: c.rebuyStack != null ? num(c.rebuyStack, 0) || undefined : undefined,
     lateRegLevel: c.lateRegLevel != null ? num(c.lateRegLevel, 0) || undefined : undefined,
     isPublic: c.isPublic === true,
+    botLevel: c.botLevel === 'easy' || c.botLevel === 'hard' ? c.botLevel : 'normal',
     levels: sanitizeLevels(c.levels),
   };
   if (config.bigBlind <= 0 || config.startingStack < config.bigBlind) {
