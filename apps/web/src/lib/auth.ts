@@ -39,6 +39,8 @@ export type PublicUser = {
   dailyStreak: number;
   /** YYYY-MM-DD of the last claimed attendance bonus. */
   lastDaily: string;
+  /** Comma-joined ids of claimed achievements. */
+  achievements: string;
 };
 
 /** New accounts start with this much game money. */
@@ -65,6 +67,8 @@ type UserRec = {
   dailyStreak: number;
   /** YYYY-MM-DD of the last claimed attendance bonus. */
   lastDaily: string;
+  /** Comma-joined ids of claimed achievements. */
+  achievements: string;
 };
 
 type SessionRec = { token: string; userId: string; createdAt: string };
@@ -80,6 +84,7 @@ function toPublic(u: UserRec): PublicUser {
     xp: u.xp ?? 0,
     dailyStreak: u.dailyStreak ?? 0,
     lastDaily: u.lastDaily ?? '',
+    achievements: u.achievements ?? '',
   };
 }
 
@@ -96,6 +101,7 @@ function normalizeUser(u: UserRec): UserRec {
     earnDay: u.earnDay ?? '',
     dailyStreak: u.dailyStreak ?? 0,
     lastDaily: u.lastDaily ?? '',
+    achievements: u.achievements ?? '',
   };
 }
 
@@ -218,6 +224,7 @@ function pgEnsure(): Promise<void> {
       await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS xp bigint NOT NULL DEFAULT 0`;
       await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_streak integer NOT NULL DEFAULT 0`;
       await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_daily text NOT NULL DEFAULT ''`;
+      await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS achievements text NOT NULL DEFAULT ''`;
       await pg().sql`CREATE TABLE IF NOT EXISTS sessions (
         token text PRIMARY KEY,
         user_id text NOT NULL,
@@ -245,6 +252,7 @@ function rowToUser(r: Record<string, unknown>): UserRec {
     earnDay: String(r.earn_day ?? ''),
     dailyStreak: Number(r.daily_streak ?? 0),
     lastDaily: String(r.last_daily ?? ''),
+    achievements: String(r.achievements ?? ''),
   };
 }
 
@@ -276,9 +284,9 @@ async function getUserById(id: string): Promise<UserRec | undefined> {
 async function insertUser(user: UserRec): Promise<void> {
   if (usePg) {
     await pgEnsure();
-    const res = await pg().sql`INSERT INTO users (id, username, nick, pass_hash, salt, created_at, balance, points, wins, games, xp, earned_today, earn_day, daily_streak, last_daily)
+    const res = await pg().sql`INSERT INTO users (id, username, nick, pass_hash, salt, created_at, balance, points, wins, games, xp, earned_today, earn_day, daily_streak, last_daily, achievements)
       VALUES (${user.id}, ${user.username}, ${user.nick}, ${user.passHash}, ${user.salt}, ${user.createdAt},
-              ${user.balance}, ${user.points}, ${user.wins}, ${user.games}, ${user.xp}, ${user.earnedToday}, ${user.earnDay}, ${user.dailyStreak}, ${user.lastDaily})
+              ${user.balance}, ${user.points}, ${user.wins}, ${user.games}, ${user.xp}, ${user.earnedToday}, ${user.earnDay}, ${user.dailyStreak}, ${user.lastDaily}, ${user.achievements})
       ON CONFLICT (username) DO NOTHING`;
     if (res.rowCount === 0) throw new Error('이미 사용 중인 아이디입니다.');
     return;
@@ -384,6 +392,7 @@ export async function register(
     earnDay: '',
     dailyStreak: 0,
     lastDaily: '',
+    achievements: '',
   };
   await insertUser(user);
   const token = await createSession(user.id);
@@ -550,6 +559,70 @@ export async function claimDaily(
     await saveEconomyFile(u);
   }
   return { claimed: true, reward, streak: newStreak, dayInCycle, balance: u.balance };
+}
+
+// ---------- achievements (업적) ----------
+
+type AchievementDef = { id: string; nameKo: string; descKo: string; icon: string; reward: number; test: (u: UserRec) => boolean };
+
+/** Milestones derived from existing account stats. Order = display order. */
+const ACHIEVEMENTS: AchievementDef[] = [
+  { id: 'first_game', nameKo: '첫 발걸음', descKo: '토너먼트 1게임 참가', icon: '🎯', reward: 20_000, test: (u) => u.games >= 1 },
+  { id: 'first_win', nameKo: '첫 승리', descKo: '토너먼트 우승', icon: '🏆', reward: 50_000, test: (u) => u.wins >= 1 },
+  { id: 'ten_games', nameKo: '단골 손님', descKo: '토너먼트 10게임 참가', icon: '🎫', reward: 50_000, test: (u) => u.games >= 10 },
+  { id: 'five_wins', nameKo: '승부사', descKo: '토너먼트 5회 우승', icon: '👑', reward: 100_000, test: (u) => u.wins >= 5 },
+  { id: 'level5', nameKo: '실버 등극', descKo: '레벨 5(실버) 달성', icon: '🥈', reward: 50_000, test: (u) => levelOf(u.xp).level >= 5 },
+  { id: 'level10', nameKo: '골드 등극', descKo: '레벨 10(골드) 달성', icon: '🥇', reward: 150_000, test: (u) => levelOf(u.xp).level >= 10 },
+  { id: 'rich', nameKo: '백만장자', descKo: '게임머니 500만 보유', icon: '💰', reward: 100_000, test: (u) => u.balance >= 5_000_000 },
+  { id: 'streak7', nameKo: '개근상', descKo: '7일 연속 출석', icon: '📅', reward: 100_000, test: (u) => u.dailyStreak >= 7 },
+];
+
+export type AchievementView = {
+  id: string; nameKo: string; descKo: string; icon: string; reward: number; met: boolean; claimed: boolean;
+};
+
+function claimedSet(u: UserRec): Set<string> {
+  return new Set((u.achievements ?? '').split(',').filter(Boolean));
+}
+
+/** Full achievement list with met/claimed flags for the UI. */
+export async function achievementStatus(username: string): Promise<AchievementView[]> {
+  const rec = await findUserByUsername(username);
+  if (!rec) throw new Error('로그인이 필요합니다.');
+  const u = normalizeUser(rec);
+  const claimed = claimedSet(u);
+  return ACHIEVEMENTS.map((a) => ({
+    id: a.id, nameKo: a.nameKo, descKo: a.descKo, icon: a.icon, reward: a.reward,
+    met: a.test(u), claimed: claimed.has(a.id),
+  }));
+}
+
+/** Grant rewards for every met-but-unclaimed achievement. Returns what was claimed. */
+export async function claimAchievements(
+  username: string,
+): Promise<{ claimed: AchievementView[]; reward: number; balance: number }> {
+  const rec = await findUserByUsername(username);
+  if (!rec) throw new Error('로그인이 필요합니다.');
+  const u = normalizeUser(rec);
+  const have = claimedSet(u);
+  const fresh = ACHIEVEMENTS.filter((a) => a.test(u) && !have.has(a.id));
+  if (!fresh.length) return { claimed: [], reward: 0, balance: u.balance };
+  const reward = fresh.reduce((a, x) => a + x.reward, 0);
+  for (const a of fresh) have.add(a.id);
+  const joined = [...have].join(',');
+  u.balance += reward;
+  u.achievements = joined;
+  if (usePg) {
+    await pgEnsure();
+    await pg().sql`UPDATE users SET balance = balance + ${reward}, achievements = ${joined} WHERE id = ${u.id}`;
+  } else {
+    await saveEconomyFile(u);
+  }
+  return {
+    claimed: fresh.map((a) => ({ id: a.id, nameKo: a.nameKo, descKo: a.descKo, icon: a.icon, reward: a.reward, met: true, claimed: true })),
+    reward,
+    balance: u.balance,
+  };
 }
 
 /** Spend game money (buy-in / rebuy). Throws if the balance is too low. */
