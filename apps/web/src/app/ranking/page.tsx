@@ -11,6 +11,7 @@ type Row = {
   wins: number;
   games: number;
   xp?: number;
+  avatar?: string;
 };
 
 const won = (x: number) => (Math.round(x) || 0).toLocaleString('ko-KR');
@@ -122,6 +123,7 @@ export default function RankingPage() {
                         {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}`}
                       </td>
                       <td style={{ textAlign: 'left', padding: '8px', fontWeight: 600 }}>
+                        {r.avatar ? `${r.avatar} ` : ''}
                         {r.nick}
                         {isMe ? ' (나)' : ''}
                       </td>
