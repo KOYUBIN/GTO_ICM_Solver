@@ -233,7 +233,10 @@ export function HomeDashboard() {
 
       {/* Quick actions */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-        <Link href="/trainer" className="pill" style={{ background: 'rgba(63,185,80,0.12)', border: '1px solid var(--accent)', color: 'var(--accent)', textDecoration: 'none', fontWeight: 700 }}>
+        <Link href="/play" className="pill" style={{ background: 'rgba(63,185,80,0.12)', border: '1px solid var(--accent)', color: 'var(--accent)', textDecoration: 'none', fontWeight: 700 }}>
+          🤖 AI와 바로 연습
+        </Link>
+        <Link href="/trainer" className="pill" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text)', textDecoration: 'none', fontWeight: 700 }}>
           🎓 학습하고 게임머니 벌기
         </Link>
         <Link href="/monster" className="pill" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text)', textDecoration: 'none', fontWeight: 700 }}>

@@ -341,6 +341,39 @@ function Landing({
     }
   }
 
+  /** One-tap solo practice: private cash table vs 3 AI, enter immediately. */
+  async function quickPlay() {
+    setBusy(true);
+    setError('');
+    try {
+      const who = name.trim() || '플레이어';
+      const { room, playerId } = await createRoom({
+        name: `${who}의 연습 테이블`,
+        hostName: who,
+        config: {
+          presetId: 'custom', // 단일 레벨 (getPreset 조회 안 함)
+          presetName: '연습 (vs AI)',
+          isPublic: false,
+          botLevel,
+          startingStack: 1500,
+          smallBlind: 10,
+          bigBlind: 20,
+          ante: 0,
+          levelMinutes: 0,
+          actionTimeoutSec: 0, // 연습이니 시간 제한 없음
+          autoNextHand: true,
+          allowRebuy: true,
+        },
+        aiCount: 3,
+      });
+      onEnter(room.id, playerId, who);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function joinById(id: string) {
     if (!name.trim()) {
       setError('이름을 입력하세요.');
@@ -394,6 +427,19 @@ function Landing({
           <span className="muted" style={{ color: 'var(--blue)' }}>{notice}</span>
         </div>
       )}
+
+      {/* One-tap solo practice vs AI */}
+      <div className="card" style={{ border: '2px solid var(--accent)', background: 'rgba(63,185,80,0.06)', display: 'flex', gap: 12, alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+        <div>
+          <strong style={{ fontSize: 15 }}>🤖 AI와 바로 연습</strong>
+          <p className="muted" style={{ margin: '4px 0 0', fontSize: 13 }}>
+            친구를 기다릴 필요 없이 AI 3명과 즉시 시작 — 난이도 {botLevel === 'easy' ? '쉬움' : botLevel === 'hard' ? '어려움' : '보통'} (아래에서 변경).
+          </p>
+        </div>
+        <button onClick={quickPlay} disabled={busy} style={{ fontWeight: 800, padding: '10px 20px', whiteSpace: 'nowrap' }}>
+          {busy ? '준비 중…' : '바로 시작 →'}
+        </button>
+      </div>
 
       {roomBackend === 'file' && (
         <div className="card" style={{ border: '2px solid var(--warn)', background: 'rgba(210,153,34,0.08)' }}>
