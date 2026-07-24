@@ -42,6 +42,8 @@ export interface RoomConfig {
   lateRegLevel?: number;
   /** Show this table in the public lobby list (joinable without a code). */
   isPublic?: boolean;
+  /** AI player difficulty when the table seats bots. */
+  botLevel?: 'easy' | 'normal' | 'hard';
 }
 
 /** One table-chat message (bounded ring buffer on the room). */
