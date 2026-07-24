@@ -482,26 +482,52 @@ export async function earn(
   if (!rec) throw new Error('로그인이 필요합니다.');
   const u = normalizeUser(rec);
   const day = today();
+  const amt = Math.max(0, Math.floor(amount));
+  if (usePg) {
+    // Atomic: cap/grant computed from the row's CURRENT value under the row
+    // lock, so N concurrent requests each add only their true capped delta
+    // (no double-credit, daily cap holds). prev = day-rolled earned_today.
+    await pgEnsure();
+    const { rows } = await pg().sql`UPDATE users SET
+        earn_day = ${day},
+        earned_today = LEAST(${DAILY_EARN_CAP}::bigint,
+          (CASE WHEN earn_day = ${day} THEN earned_today ELSE 0 END) + ${amt}),
+        balance = balance
+          + (LEAST(${DAILY_EARN_CAP}::bigint,
+              (CASE WHEN earn_day = ${day} THEN earned_today ELSE 0 END) + ${amt})
+             - (CASE WHEN earn_day = ${day} THEN earned_today ELSE 0 END)),
+        xp = xp + (CASE
+          WHEN (LEAST(${DAILY_EARN_CAP}::bigint,
+                 (CASE WHEN earn_day = ${day} THEN earned_today ELSE 0 END) + ${amt})
+                - (CASE WHEN earn_day = ${day} THEN earned_today ELSE 0 END)) > 0
+          THEN GREATEST(1, ROUND(
+                (LEAST(${DAILY_EARN_CAP}::bigint,
+                  (CASE WHEN earn_day = ${day} THEN earned_today ELSE 0 END) + ${amt})
+                 - (CASE WHEN earn_day = ${day} THEN earned_today ELSE 0 END)) / 100.0))
+          ELSE 0 END)
+      WHERE id = ${u.id}
+      RETURNING balance, earned_today`;
+    const row = rows[0];
+    const newEarned = Number(row?.earned_today ?? 0);
+    const prev = u.earnDay === day ? u.earnedToday : 0;
+    // Actual granted delta from the DB's perspective (>= 0; approximate under
+    // races only in the reported number, never in the stored balance).
+    const grant = Math.max(0, newEarned - prev);
+    return { balance: Number(row?.balance ?? u.balance), earned: Math.min(grant, amt), capped: newEarned >= DAILY_EARN_CAP && grant < amt };
+  }
   if (u.earnDay !== day) {
     u.earnDay = day;
     u.earnedToday = 0;
   }
   const room = Math.max(0, DAILY_EARN_CAP - u.earnedToday);
-  const grant = Math.max(0, Math.min(Math.floor(amount), room));
+  const grant = Math.max(0, Math.min(amt, room));
   // XP tracks earned money: at least 1 xp per rewarded activity (none if capped out).
   const xpGain = grant > 0 ? Math.max(1, Math.round(grant / 100)) : 0;
   u.earnedToday += grant;
   u.balance += grant;
   u.xp += xpGain;
-  if (usePg) {
-    await pgEnsure();
-    await pg().sql`UPDATE users SET balance = balance + ${grant}, xp = xp + ${xpGain},
-      earned_today = ${u.earnedToday}, earn_day = ${u.earnDay}
-      WHERE id = ${u.id}`;
-  } else {
-    await saveEconomyFile(u);
-  }
-  return { balance: u.balance, earned: grant, capped: grant < Math.floor(amount) };
+  await saveEconomyFile(u);
+  return { balance: u.balance, earned: grant, capped: grant < amt };
 }
 
 // ---------- daily attendance bonus ----------
@@ -622,6 +648,7 @@ export async function claimAchievements(
   const rec = await findUserByUsername(username);
   if (!rec) throw new Error('로그인이 필요합니다.');
   const u = normalizeUser(rec);
+  const prevAchievements = u.achievements; // 낙관적 가드용 (DB에 저장된 원본 문자열)
   const have = claimedSet(u);
   const fresh = ACHIEVEMENTS.filter((a) => a.test(u) && !have.has(a.id));
   if (!fresh.length) return { claimed: [], reward: 0, balance: u.balance };
@@ -632,7 +659,14 @@ export async function claimAchievements(
   u.achievements = joined;
   if (usePg) {
     await pgEnsure();
-    await pg().sql`UPDATE users SET balance = balance + ${reward}, achievements = ${joined} WHERE id = ${u.id}`;
+    // 낙관적 동시성 가드: 다른 동시 청구가 이미 적용됐으면 0행 매치 → 중복 지급 없음.
+    const res = await pg().sql`UPDATE users SET balance = balance + ${reward}, achievements = ${joined}
+      WHERE id = ${u.id} AND achievements = ${prevAchievements} RETURNING balance`;
+    if (res.rowCount === 0) {
+      const cur = await getUserById(u.id);
+      return { claimed: [], reward: 0, balance: cur ? normalizeUser(cur).balance : u.balance - reward };
+    }
+    u.balance = Number(res.rows[0].balance);
   } else {
     await saveEconomyFile(u);
   }
@@ -690,28 +724,62 @@ export async function buyAvatar(
   const rec = await findUserByUsername(username);
   if (!rec) throw new Error('로그인이 필요합니다.');
   const u = normalizeUser(rec);
-  if (id === '') {
-    u.avatar = '';
-  } else {
-    const item = SHOP_ITEMS.find((i) => i.id === id);
-    if (!item) throw new Error('존재하지 않는 아이템입니다.');
-    const owned = new Set((u.owned ?? '').split(',').filter(Boolean));
-    if (!owned.has(id)) {
-      if (u.balance < item.cost) throw new Error('게임머니가 부족합니다.');
-      u.balance -= item.cost;
-      owned.add(id);
-      u.owned = [...owned].join(',');
+
+  // 해제/재장착: 돈·보유 목록을 건드리지 않고 avatar만 갱신 (동시성 무해).
+  const item = id === '' ? null : SHOP_ITEMS.find((i) => i.id === id);
+  if (id !== '' && !item) throw new Error('존재하지 않는 아이템입니다.');
+  const ownedSet = new Set((u.owned ?? '').split(',').filter(Boolean));
+  const isPurchase = !!item && !ownedSet.has(id);
+
+  if (!isPurchase) {
+    u.avatar = item ? item.emoji : '';
+    if (usePg) {
+      await pgEnsure();
+      await pg().sql`UPDATE users SET avatar = ${u.avatar} WHERE id = ${u.id}`;
+    } else {
+      await saveEconomyFile(u);
     }
-    u.avatar = item.emoji;
+    return { balance: u.balance, avatar: u.avatar, owned: u.owned, bought: false };
   }
+
+  // 구매: 상대적 차감 + 잔액 가드 + SQL측 owned append (절대값 덮어쓰기 금지 —
+  // 동시 earn/spend/상금 지급을 잃지 않는다). 같은 아이템 동시 구매도 멱등.
+  const cost = item!.cost;
+  if (u.balance < cost) throw new Error('게임머니가 부족합니다.');
   if (usePg) {
     await pgEnsure();
-    await pg().sql`UPDATE users SET balance = ${u.balance}, owned = ${u.owned}, avatar = ${u.avatar} WHERE id = ${u.id}`;
-  } else {
-    await saveEconomyFile(u);
+    const marker = `%,${id},%`;
+    // 미보유 조건까지 WHERE에 포함: 같은 아이템 동시 구매 시 한 쪽만 차감된다.
+    const res = await pg().sql`UPDATE users SET
+        balance = balance - ${cost},
+        owned = CASE
+          WHEN owned IS NULL OR owned = '' THEN ${id}
+          ELSE owned || ',' || ${id}
+        END,
+        avatar = ${item!.emoji}
+      WHERE id = ${u.id} AND balance >= ${cost}
+        AND (',' || COALESCE(owned, '') || ',') NOT LIKE ${marker}
+      RETURNING balance, owned, avatar`;
+    if (res.rowCount === 0) {
+      // 경합 패배: 이미 보유하게 됐다면 무료 장착으로 처리, 아니면 잔액 부족.
+      const cur = await getUserById(u.id);
+      const now = cur ? normalizeUser(cur) : null;
+      const nowOwned = new Set((now?.owned ?? '').split(',').filter(Boolean));
+      if (now && nowOwned.has(id)) {
+        await pg().sql`UPDATE users SET avatar = ${item!.emoji} WHERE id = ${u.id}`;
+        return { balance: now.balance, avatar: item!.emoji, owned: now.owned, bought: false };
+      }
+      throw new Error('게임머니가 부족합니다.');
+    }
+    const row = res.rows[0];
+    return { balance: Number(row.balance), avatar: String(row.avatar), owned: String(row.owned), bought: true };
   }
-  const item = SHOP_ITEMS.find((i) => i.id === id);
-  return { balance: u.balance, avatar: u.avatar, owned: u.owned, bought: !!item };
+  u.balance -= cost;
+  ownedSet.add(id);
+  u.owned = [...ownedSet].join(',');
+  u.avatar = item!.emoji;
+  await saveEconomyFile(u);
+  return { balance: u.balance, avatar: u.avatar, owned: u.owned, bought: true };
 }
 
 /** Spend game money (buy-in / rebuy). Throws if the balance is too low. */
