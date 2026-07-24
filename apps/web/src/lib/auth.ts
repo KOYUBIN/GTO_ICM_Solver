@@ -41,6 +41,10 @@ export type PublicUser = {
   lastDaily: string;
   /** Comma-joined ids of claimed achievements. */
   achievements: string;
+  /** Equipped avatar emoji ('' = default initial). */
+  avatar: string;
+  /** Comma-joined ids of owned shop items. */
+  owned: string;
 };
 
 /** New accounts start with this much game money. */
@@ -69,6 +73,10 @@ type UserRec = {
   lastDaily: string;
   /** Comma-joined ids of claimed achievements. */
   achievements: string;
+  /** Equipped avatar emoji ('' = default initial). */
+  avatar: string;
+  /** Comma-joined ids of owned shop items. */
+  owned: string;
 };
 
 type SessionRec = { token: string; userId: string; createdAt: string };
@@ -85,6 +93,8 @@ function toPublic(u: UserRec): PublicUser {
     dailyStreak: u.dailyStreak ?? 0,
     lastDaily: u.lastDaily ?? '',
     achievements: u.achievements ?? '',
+    avatar: u.avatar ?? '',
+    owned: u.owned ?? '',
   };
 }
 
@@ -102,6 +112,8 @@ function normalizeUser(u: UserRec): UserRec {
     dailyStreak: u.dailyStreak ?? 0,
     lastDaily: u.lastDaily ?? '',
     achievements: u.achievements ?? '',
+    avatar: u.avatar ?? '',
+    owned: u.owned ?? '',
   };
 }
 
@@ -225,6 +237,8 @@ function pgEnsure(): Promise<void> {
       await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_streak integer NOT NULL DEFAULT 0`;
       await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_daily text NOT NULL DEFAULT ''`;
       await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS achievements text NOT NULL DEFAULT ''`;
+      await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar text NOT NULL DEFAULT ''`;
+      await pg().sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS owned text NOT NULL DEFAULT ''`;
       await pg().sql`CREATE TABLE IF NOT EXISTS sessions (
         token text PRIMARY KEY,
         user_id text NOT NULL,
@@ -253,6 +267,8 @@ function rowToUser(r: Record<string, unknown>): UserRec {
     dailyStreak: Number(r.daily_streak ?? 0),
     lastDaily: String(r.last_daily ?? ''),
     achievements: String(r.achievements ?? ''),
+    avatar: String(r.avatar ?? ''),
+    owned: String(r.owned ?? ''),
   };
 }
 
@@ -284,9 +300,9 @@ async function getUserById(id: string): Promise<UserRec | undefined> {
 async function insertUser(user: UserRec): Promise<void> {
   if (usePg) {
     await pgEnsure();
-    const res = await pg().sql`INSERT INTO users (id, username, nick, pass_hash, salt, created_at, balance, points, wins, games, xp, earned_today, earn_day, daily_streak, last_daily, achievements)
+    const res = await pg().sql`INSERT INTO users (id, username, nick, pass_hash, salt, created_at, balance, points, wins, games, xp, earned_today, earn_day, daily_streak, last_daily, achievements, avatar, owned)
       VALUES (${user.id}, ${user.username}, ${user.nick}, ${user.passHash}, ${user.salt}, ${user.createdAt},
-              ${user.balance}, ${user.points}, ${user.wins}, ${user.games}, ${user.xp}, ${user.earnedToday}, ${user.earnDay}, ${user.dailyStreak}, ${user.lastDaily}, ${user.achievements})
+              ${user.balance}, ${user.points}, ${user.wins}, ${user.games}, ${user.xp}, ${user.earnedToday}, ${user.earnDay}, ${user.dailyStreak}, ${user.lastDaily}, ${user.achievements}, ${user.avatar}, ${user.owned})
       ON CONFLICT (username) DO NOTHING`;
     if (res.rowCount === 0) throw new Error('이미 사용 중인 아이디입니다.');
     return;
@@ -393,6 +409,8 @@ export async function register(
     dailyStreak: 0,
     lastDaily: '',
     achievements: '',
+    avatar: '',
+    owned: '',
   };
   await insertUser(user);
   const token = await createSession(user.id);
@@ -623,6 +641,77 @@ export async function claimAchievements(
     reward,
     balance: u.balance,
   };
+}
+
+// ---------- avatar shop (게임머니 소비처) ----------
+
+type ShopItem = { id: string; emoji: string; nameKo: string; cost: number };
+
+/** Buyable avatar emojis. One-time purchase; re-equip is free. */
+const SHOP_ITEMS: ShopItem[] = [
+  { id: 'cat', emoji: '🐱', nameKo: '냥이', cost: 100_000 },
+  { id: 'robot', emoji: '🤖', nameKo: '로봇', cost: 100_000 },
+  { id: 'joker', emoji: '🃏', nameKo: '조커', cost: 150_000 },
+  { id: 'fire', emoji: '🔥', nameKo: '불꽃', cost: 150_000 },
+  { id: 'shark', emoji: '🦈', nameKo: '샤크', cost: 200_000 },
+  { id: 'dragon', emoji: '🐉', nameKo: '드래곤', cost: 250_000 },
+  { id: 'rocket', emoji: '🚀', nameKo: '로켓', cost: 250_000 },
+  { id: 'crown', emoji: '👑', nameKo: '왕관', cost: 400_000 },
+  { id: 'diamond', emoji: '💎', nameKo: '다이아', cost: 600_000 },
+  { id: 'goat', emoji: '🐐', nameKo: 'GOAT', cost: 1_000_000 },
+];
+
+export type ShopView = {
+  balance: number;
+  avatar: string;
+  items: { id: string; emoji: string; nameKo: string; cost: number; owned: boolean; equipped: boolean }[];
+};
+
+export async function shopStatus(username: string): Promise<ShopView> {
+  const rec = await findUserByUsername(username);
+  if (!rec) throw new Error('로그인이 필요합니다.');
+  const u = normalizeUser(rec);
+  const owned = new Set((u.owned ?? '').split(',').filter(Boolean));
+  return {
+    balance: u.balance,
+    avatar: u.avatar ?? '',
+    items: SHOP_ITEMS.map((i) => ({ ...i, owned: owned.has(i.id), equipped: u.avatar === i.emoji })),
+  };
+}
+
+/**
+ * Buy (if needed) and equip an avatar, or reset to the default with id ''.
+ * Re-equipping an already-owned avatar is free.
+ */
+export async function buyAvatar(
+  username: string,
+  id: string,
+): Promise<{ balance: number; avatar: string; owned: string; bought: boolean }> {
+  const rec = await findUserByUsername(username);
+  if (!rec) throw new Error('로그인이 필요합니다.');
+  const u = normalizeUser(rec);
+  if (id === '') {
+    u.avatar = '';
+  } else {
+    const item = SHOP_ITEMS.find((i) => i.id === id);
+    if (!item) throw new Error('존재하지 않는 아이템입니다.');
+    const owned = new Set((u.owned ?? '').split(',').filter(Boolean));
+    if (!owned.has(id)) {
+      if (u.balance < item.cost) throw new Error('게임머니가 부족합니다.');
+      u.balance -= item.cost;
+      owned.add(id);
+      u.owned = [...owned].join(',');
+    }
+    u.avatar = item.emoji;
+  }
+  if (usePg) {
+    await pgEnsure();
+    await pg().sql`UPDATE users SET balance = ${u.balance}, owned = ${u.owned}, avatar = ${u.avatar} WHERE id = ${u.id}`;
+  } else {
+    await saveEconomyFile(u);
+  }
+  const item = SHOP_ITEMS.find((i) => i.id === id);
+  return { balance: u.balance, avatar: u.avatar, owned: u.owned, bought: !!item };
 }
 
 /** Spend game money (buy-in / rebuy). Throws if the balance is too low. */

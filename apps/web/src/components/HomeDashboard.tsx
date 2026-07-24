@@ -24,7 +24,7 @@ function levelProgress(xp: number): { pct: number; toNext: number } {
 
 const won = (x: number) => (Math.round(x) || 0).toLocaleString('ko-KR');
 
-type Me = { username: string; nick: string; balance?: number; points?: number; wins?: number; games?: number; xp?: number };
+type Me = { username: string; nick: string; balance?: number; points?: number; wins?: number; games?: number; xp?: number; avatar?: string };
 type Hand = { id: string; roomName: string; delta: number; won: boolean; at: string };
 
 function relTime(iso: string): string {
@@ -120,6 +120,7 @@ export function HomeDashboard() {
     <div className="card" style={{ marginBottom: 22, border: '1px solid var(--accent-dim)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <div>
+          {me.avatar && <span style={{ fontSize: 18, marginRight: 4 }}>{me.avatar}</span>}
           <span style={{ fontSize: 16, fontWeight: 800 }}>{me.nick}</span>{' '}
           <span className="pill" style={{ background: 'rgba(240,180,0,0.14)', color: 'var(--warn)', fontWeight: 800, marginLeft: 4 }}>
             {lv.nameKo}

@@ -30,6 +30,7 @@ const GROUPS: { title: string; links: { href: string; label: string; icon: strin
     links: [
       { href: '/trainer', label: '학습하기', icon: '🎓' },
       { href: '/ranking', label: '랭킹', icon: '🏅' },
+      { href: '/shop', label: '아바타 상점', icon: '🛍️' },
       { href: '/history', label: '핸드 히스토리', icon: '🕘' },
       { href: '/replay', label: '리플레이 · 분석', icon: '🎬' },
       { href: '/notes', label: '핸드 기록장', icon: '📓' },
