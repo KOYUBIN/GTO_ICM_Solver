@@ -246,6 +246,9 @@ export function HomeDashboard() {
         <Link href="/ranking" className="pill" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text)', textDecoration: 'none', fontWeight: 700 }}>
           🏅 랭킹
         </Link>
+        <Link href="/shop" className="pill" style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', color: 'var(--text)', textDecoration: 'none', fontWeight: 700 }}>
+          🛍️ 상점
+        </Link>
       </div>
     </div>
   );
