@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { InstallButton } from '@/components/InstallButton';
+import { HomeDashboard } from '@/components/HomeDashboard';
 
 interface Feature {
   href: string;
@@ -105,6 +106,8 @@ export default function Home() {
       <div style={{ marginBottom: 18 }}>
         <InstallButton />
       </div>
+
+      <HomeDashboard />
 
       <div className="grid-cards" style={{ marginBottom: 26 }}>
         {FEATURED.map((f) => (
