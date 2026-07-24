@@ -37,9 +37,14 @@ function relTime(iso: string): string {
   return `${Math.floor(h / 24)}일 전`;
 }
 
+type Daily = { canClaim: boolean; streak: number; dayInCycle: number; nextReward: number; rewards: number[] };
+
 export function HomeDashboard() {
   const [me, setMe] = useState<Me | null | undefined>(undefined); // undefined = loading
   const [hands, setHands] = useState<Hand[]>([]);
+  const [daily, setDaily] = useState<Daily | null>(null);
+  const [claiming, setClaiming] = useState(false);
+  const [claimMsg, setClaimMsg] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -53,6 +58,10 @@ export function HomeDashboard() {
             .then((r) => (r.ok ? r.json() : { hands: [] }))
             .then((h) => alive && setHands(h.hands ?? []))
             .catch(() => {});
+          fetch('/api/economy/daily')
+            .then((r) => (r.ok ? r.json() : null))
+            .then((s) => alive && s && !s.error && setDaily(s))
+            .catch(() => {});
         }
       })
       .catch(() => alive && setMe(null));
@@ -60,6 +69,27 @@ export function HomeDashboard() {
       alive = false;
     };
   }, []);
+
+  async function claimDaily() {
+    if (claiming) return;
+    setClaiming(true);
+    try {
+      const r = await fetch('/api/economy/daily', { method: 'POST' });
+      const d = await r.json();
+      if (r.ok && d.claimed) {
+        setClaimMsg(`💰 +${won(d.reward)} 게임머니 (${d.streak}일 연속!)`);
+        setMe((m) => (m ? { ...m, balance: (m.balance ?? 0) + d.reward } : m));
+        setDaily((s) => (s ? { ...s, canClaim: false, streak: d.streak } : s));
+      } else if (d.already) {
+        setClaimMsg('오늘은 이미 받았습니다.');
+        setDaily((s) => (s ? { ...s, canClaim: false } : s));
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setClaiming(false);
+    }
+  }
 
   if (me === undefined) return null; // avoid layout flash while loading
 
@@ -124,6 +154,60 @@ export function HomeDashboard() {
           </div>
         ))}
       </div>
+
+      {/* Daily attendance bonus */}
+      {daily && (
+        <div style={{ marginTop: 12, padding: '10px 12px', background: 'var(--bg-elevated)', border: `1px solid ${daily.canClaim ? 'var(--warn)' : 'var(--border)'}`, borderRadius: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 700 }}>
+              📅 출석 보너스 {daily.streak > 0 && <span className="muted" style={{ fontWeight: 400 }}>· {daily.streak}일 연속</span>}
+            </span>
+            <button
+              onClick={claimDaily}
+              disabled={!daily.canClaim || claiming}
+              style={{
+                padding: '6px 14px',
+                fontSize: 13,
+                fontWeight: 800,
+                borderRadius: 8,
+                border: 'none',
+                cursor: daily.canClaim ? 'pointer' : 'default',
+                background: daily.canClaim ? 'var(--warn)' : 'var(--bg)',
+                color: daily.canClaim ? '#0a0e13' : 'var(--text-dim)',
+              }}
+            >
+              {daily.canClaim ? `받기 (+${won(daily.nextReward)})` : '오늘 완료 ✓'}
+            </button>
+          </div>
+          {/* 7-day strip */}
+          <div style={{ display: 'flex', gap: 4 }}>
+            {daily.rewards.map((r, i) => {
+              const dayNo = i + 1;
+              const isNext = daily.canClaim && dayNo === daily.dayInCycle;
+              return (
+                <div
+                  key={i}
+                  style={{
+                    flex: 1,
+                    textAlign: 'center',
+                    padding: '4px 2px',
+                    borderRadius: 6,
+                    fontSize: 10,
+                    border: isNext ? '1px solid var(--warn)' : '1px solid var(--border)',
+                    background: isNext ? 'rgba(240,180,0,0.14)' : 'var(--bg)',
+                    color: isNext ? 'var(--warn)' : 'var(--text-dim)',
+                    fontWeight: isNext ? 800 : 400,
+                  }}
+                >
+                  <div>{dayNo}일</div>
+                  <div>{r >= 10000 ? `${Math.round(r / 10000)}만` : r}</div>
+                </div>
+              );
+            })}
+          </div>
+          {claimMsg && <p style={{ margin: '8px 0 0', fontSize: 12, color: 'var(--accent)', fontWeight: 700 }}>{claimMsg}</p>}
+        </div>
+      )}
 
       {/* Recent hands */}
       {hands.length > 0 && (
