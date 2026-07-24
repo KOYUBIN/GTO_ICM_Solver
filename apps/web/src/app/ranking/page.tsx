@@ -24,15 +24,28 @@ function levelOf(xp: number): { level: number; nameKo: string } {
   return { level, nameKo: `${tier} Lv.${level}` };
 }
 
+const SORTS = [
+  { key: 'points', label: '누적 상금' },
+  { key: 'xp', label: '레벨' },
+  { key: 'balance', label: '게임머니' },
+  { key: 'wins', label: '우승' },
+] as const;
+type SortKey = (typeof SORTS)[number]['key'];
+
 export default function RankingPage() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [me, setMe] = useState<string | null>(null);
+  const [sort, setSort] = useState<SortKey>('points');
 
   useEffect(() => {
-    fetch('/api/economy/leaderboard')
+    setRows(null);
+    fetch(`/api/economy/leaderboard?sort=${sort}`)
       .then((r) => r.json())
       .then((d) => setRows(d.rows ?? []))
       .catch(() => setRows([]));
+  }, [sort]);
+
+  useEffect(() => {
     fetch('/api/auth/me')
       .then((r) => r.json())
       .then((d) => setMe(d.user?.username ?? null))
@@ -43,9 +56,30 @@ export default function RankingPage() {
     <div className="container">
       <h1>🏅 랭킹</h1>
       <p className="subtitle">
-        토너먼트 누적 상금(랭킹 점수) 기준 순위입니다. 게임머니는 퀴즈·학습으로 벌고, 토너먼트 바이인에
-        쓰고, 우승하면 상금으로 받습니다.
+        기준을 바꿔 순위를 볼 수 있습니다. 게임머니는 퀴즈·학습으로 벌고, 토너먼트 바이인에 쓰고,
+        우승하면 상금으로 받습니다.
       </p>
+
+      {/* Sort tabs */}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
+        {SORTS.map((s) => (
+          <button
+            key={s.key}
+            type="button"
+            className="secondary"
+            onClick={() => setSort(s.key)}
+            style={{
+              padding: '8px 14px',
+              fontWeight: 700,
+              borderColor: sort === s.key ? 'var(--accent)' : 'var(--border)',
+              color: sort === s.key ? 'var(--accent)' : 'var(--text-dim)',
+              background: sort === s.key ? 'rgba(63,185,80,0.12)' : 'var(--bg-elevated)',
+            }}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
 
       {rows === null ? (
         <div className="card">

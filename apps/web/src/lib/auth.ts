@@ -665,17 +665,26 @@ export async function awardPrize(username: string, prize: number, isWin: boolean
 }
 
 /** Top members by cumulative winnings (points), then balance. */
-export async function leaderboard(limit = 50): Promise<PublicUser[]> {
+export type LeaderboardSort = 'points' | 'balance' | 'xp' | 'wins';
+
+/** Top members, sortable by cumulative winnings / game money / level(xp) / wins. */
+export async function leaderboard(limit = 50, sort: LeaderboardSort = 'points'): Promise<PublicUser[]> {
   const n = Math.max(1, Math.min(100, Math.floor(limit)));
+  const key: LeaderboardSort = ['points', 'balance', 'xp', 'wins'].includes(sort) ? sort : 'points';
   if (usePg) {
     await pgEnsure();
-    const { rows } = await pg().sql`SELECT * FROM users ORDER BY points DESC, balance DESC LIMIT ${n}`;
-    return rows.map((r) => toPublic(rowToUser(r)));
+    // Column name is from a fixed whitelist above, safe to interpolate.
+    const col = key;
+    const { rows } = await pg().query(
+      `SELECT * FROM users ORDER BY ${col} DESC, points DESC LIMIT $1`,
+      [n],
+    );
+    return rows.map((r: Record<string, unknown>) => toPublic(rowToUser(r)));
   }
   const db = await fileRead();
   return db.users
     .map(normalizeUser)
-    .sort((a, b) => b.points - a.points || b.balance - a.balance)
+    .sort((a, b) => (b[key] as number) - (a[key] as number) || b.points - a.points)
     .slice(0, n)
     .map(toPublic);
 }
